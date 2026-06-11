@@ -39,15 +39,16 @@ als Grundlage, um das Thema dem Prof zu erläutern.
 
 ## 2. Annahmen (Stichpunkte)
 
-- **Zeit:** 1 Tag = 24 Slots (stündlich). Slots sind **unabhängig** (kein Speicher, keine Kopplung).
+- **Zeit:** 1 Tag = 24 Slots (stündlich). Ohne Batterie sind die Slots **unabhängig**; mit Batterie **koppelt** der Speicher sie (Überschuss eines Slots deckt ein späteres Defizit).
 - **Kontrakt:** je Slot Menge `x_t` [kWh] **und** Preis `p_t` [ct/kWh] → 48 verhandelte Werte.
 - **Öffentliche Marktdaten** (Mediator + beide kennen sie): Einspeisevergütung `f_t`, Netzbezugspreis `r_t`.
 - **Private Daten** (nur der jeweilige Agent): Erzeugung `g_t` (Supplier), Bedarf `d_t` (Customer).
 - **Preisband fix vorgegeben:** `f_t ≤ p_t ≤ r_t` (durch den Mediator erzwungen, s. u.). `f_t` niedrig (~8 ct),
   `r_t` höher und in den Lastspitzen teurer (Time-of-Use, ~25–37 ct).
 - **Keine Netzengpässe:** beliebige Mengen handelbar; Netz ist unbegrenzter Fallback.
-- **Übermenge beim Customer** ist wertlos (Strafkosten `s = 0` als Default).
-- **Daten synthetisch & generiert** (PV-Glocke, Last-Doppelpeak), Profil über einen Seed reproduzierbar.
+- **Übermenge beim Customer** ist wertlos (Strafkosten `s = 0` als Default), sofern sie nicht in die Batterie passt.
+- **Batterie (optional):** Supplier und Customer haben je einen **privaten** Speicher; `capacity = 0` schaltet ihn aus (= ursprüngliches, slot-unabhängiges Modell).
+- **Daten synthetisch & generiert** (PV-Glocke, Last-Doppelpeak); **voll reproduzierbar** über zwei Seeds (Szenario + Verhandlung).
 - **Kosten der Erzeugung** beim Supplier = 0 (PV); modelliert wird nur der Handel, nicht der Anlagenbetrieb.
 
 ## 3. Bestandteile der Verhandlung (Stichpunkte)
@@ -59,6 +60,7 @@ als Grundlage, um das Thema dem Prof zu erläutern.
 | **Agent (abstrakt)** | [Agent.java](src/Agent.java) | Schnittstelle: `utility`, `vote`, `delete`. |
 | **Supplier** | [SupplierAgent.java](src/SupplierAgent.java) | Private Profit-Zielfunktion. |
 | **Customer** | [CustomerAgent.java](src/CustomerAgent.java) | Private Kosten-Zielfunktion. |
+| **Batterie** | [Battery.java](src/Battery.java) | Privater Speicher je Agent: greedy Lade-/Entlade-Dispatch (koppelt Slots). |
 | **Mediator** | [Mediator.java](src/Mediator.java) | **Uninformiert.** Erzeugt Vorschläge (GA-Operatoren) + gibt Annealing-Temperatur vor. |
 | **Verhandlung** | [Verhandlung.java](src/Verhandlung.java) | Hauptschleife: löschen → reproduzieren → abstimmen → archivieren. |
 | **Auswertung** | [Metrics.java](src/Metrics.java) | Kennzahlen & Baseline-/Optimum-Vergleich (nur Analyse, „God-View"). |
@@ -134,9 +136,18 @@ Jeder Agent vergleicht `delivered` nur mit **seiner eigenen** privaten Größe (
 - Fachbegriffe fürs Gespräch: **Individuelle Rationalität** (jeder besser als Netz), **Pareto-Effizienz**,
   **soziale Wohlfahrt**, **Zone of Possible Agreement (ZOPA)**.
 
+### 4.7 Speicher/Batterie (Erweiterung)
+Jeder Agent kann einen **privaten Speicher** (`Battery`) haben, der die Slots koppelt: Überschuss wird
+geladen und in einem späteren Defizit-Slot genutzt. Wichtig: **Kontrakt-Repräsentation und Mediator
+bleiben unverändert** – nur die Zielfunktion wertet den Kontrakt jetzt über einen **greedy Dispatch**
+aus (laden bei Überschuss, entladen bei Defizit; je Slot begrenzt durch `maxPower`, Verluste über den
+Wirkungsgrad η). `capacity = 0` reproduziert exakt das speicherlose Modell. Effekt: der Supplier
+schiebt Mittags-PV in den Abend-Peak, der Customer puffert Überlieferung → **deutlich geringere
+Netzabhängigkeit** und höherer beidseitiger Nutzen.
+
 **Stichworte zum Nennen:** mediierte Multi-Attribut-Verhandlung (Klein) · genetischer Algorithmus
 (Selektion/Crossover/Mutation) · Simulated Annealing (Metropolis, Kirkpatrick) · Mechanismus-Design
-(Privatheit, IR, Pareto) · Peer-to-Peer-Energiemärkte.
+(Privatheit, IR, Pareto) · Peer-to-Peer-Energiemärkte · Speicher-Dispatch.
 
 ---
 
@@ -164,7 +175,8 @@ beidseitig vorteilhaft und möglichst effizient.
 ## 6. Ergebnisse lesen und einordnen
 
 ### 6.1 Die Kennzahlen im Report
-Beispielausgabe (ein Lauf; Zahlen schwanken leicht, s. [§8](#8-bekannte-grenzen--offene-punkte)):
+Das Programm gibt **zwei Reports** aus (ohne/mit Batterie) plus einen Vergleich. Aufbau eines Reports
+(Beispiel ohne Batterie; dank Seeds reproduzierbar):
 ```
 Supplier-Profit :      694,8 ct  (Baseline     483,2)  -> +   2,12 EUR
 Customer-Kosten :     1953,1 ct  (Baseline    2059,5)  -> -   1,06 EUR
@@ -227,25 +239,30 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `coolRounds` | 60 % von `maxRounds` | Wann die Temperatur 0 erreicht. |
 | `mutationSigma` | 0,08 | Mutationsstärke (Anteil der Spanne). |
 | `crossoverRate` | 0,5 | Anteil Crossover vs. Mutation bei Reproduktion. |
-| `seed` | 42 | Seed der **Szenario- und GA-**Zufallsquelle. |
+| `scenarioSeed` | 42 | Seed der Profil-Erzeugung (auch Arg `[2]`). |
+| `negotiationSeed` | 1 | Seed des Verhandlungs-Zufalls: GA, Votes, Lösch-Münze (auch Arg `[1]`). |
+| Batterie Supplier | 10 kWh, 3 kW, η 0,95 | `capacity`, `maxPower`, `roundTripEfficiency`; `capacity=0` = aus. |
+| Batterie Customer | 5 kWh, 3 kW, η 0,95 | dito; eigener privater Speicher. |
 
 ---
 
 ## 8. Bekannte Grenzen / offene Punkte
-- **Reproduzierbarkeit unvollständig:** Die Wahl des löschenden Agenten und die Annealing-Akzeptanz
-  nutzen das **ungeseedete** `Math.random()`. Nur Szenario und GA-Operatoren hängen am `seed`.
-  ⇒ Läufe schwanken trotz gleichem Seed. **Fix (empfohlen, klein):** eine zentrale `Random`-Instanz
-  mit Seed an alle Stellen durchreichen. **Nötig, bevor man Parameter sauber vergleicht.**
+- **Reproduzierbarkeit: erledigt.** Der gesamte Verhandlungs-Zufall (GA, Votes, Lösch-Münze) läuft über
+  eine geseedete `Random`-Instanz (`negotiationSeed`), das Szenario über `scenarioSeed`. Zwei Läufe sind
+  bit-identisch.
 - **`current` startet beliebig** (zufälliger Kontrakt), nicht am Netz-Status quo – nur das Archiv
   garantiert Win-Win.
 - **Preisband wird erzwungen**, nicht ausgehandelt – bewusste Vereinfachung, aber dokumentieren.
-- **Slot-Unabhängigkeit:** ohne Speicher kann mittags zu viel PV nicht in den Abend-Peak verschoben werden.
+- **Greedy-Dispatch der Batterie:** lädt/entlädt gierig, nicht kostenoptimal (z. B. Speicher gezielt für
+  die teuersten Slots aufsparen). Optimaler Dispatch (LP) wäre eine Erweiterung.
+- **Optimum-Referenz ist speicherlos:** die %-Angabe bezieht sich auf das Optimum OHNE Speicher; mit
+  Batterie kann der Wohlstand >100 % erreichen (= sichtbarer Speicher-Gewinn, kein Fehler).
 - **Matching-Rate** misst nur Unterdeckung, nicht Überlieferung (dafür gibt es die separate Zeile).
 
 ## 9. Wie wir weitermachen (Fahrplan)
 
 **Kurzfristig (Methodik sauber machen):**
-1. **Reproduzierbarkeit fixen** (zentraler Seed) – Voraussetzung für alles Weitere.
+1. ~~Reproduzierbarkeit fixen~~ ✅ **erledigt** (zwei Seeds, geseedeter Verhandlungs-Stream, Läufe bit-identisch).
 2. **Experimente:** Parameter-Sweeps (`startTemperature`, `mutationSigma`, `crossoverRate`, `popSize`),
    je *n* Wiederholungen, Mittelwert + Streuung; **Annealing vs. gierig** sauber vergleichen.
 3. **Stagnations-Metrik** definieren (z. B. „Runde, ab der sich `bestEver` nicht mehr verbessert") und plotten.
@@ -257,8 +274,8 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 6. **Mindestakzeptanzrate** als alternativer Mediator-Hebel (Agent muss Anteil X der Vorschläge akzeptieren).
 
 **Domänen-Erweiterungen (aus unserer [README](README.md)-Ideenliste):**
-7. **Batterie/Speicher** als Zustandsvariable (koppelt Slots, verschiebt PV-Überschuss in den Abend) –
-   großer Realismus-Gewinn, „Grid-Abhängigkeit minimieren".
+7. ~~Batterie/Speicher~~ ✅ **erledigt** (beidseitig, greedy Dispatch; Mit-/Ohne-Vergleich im Output,
+   Netzabhängigkeit ~−32 %). Nächster Schritt hier: optimaler Dispatch + Batterie-Sweeps.
 8. **Variable/realistische Gridkosten**, mehrere Tage hintereinander, je Tag anderes Profil.
 9. **Mehrere/​wechselnde** Supplier & Customer (multilateral) – verändert die Stagnationsdynamik
    spürbar (hier wird Annealing relevanter).
@@ -278,6 +295,7 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `U_S` | `utility` (Supplier) | Profit (höher = besser) | ct |
 | `C_C` | `cost` (Customer) | Kosten (niedriger = besser); `utility = −cost` | ct |
 | `T` | `temperature` | Annealing-Temperatur | — |
+| — | `capacity` / `maxPower` / `η` / SoC | Batterie: Kapazität / Lade-Entladeleistung / Wirkungsgrad / Ladestand | kWh / kWh / – / kWh |
 
 ## 11. Ausführen
 ```powershell

@@ -31,7 +31,7 @@ public class Mediator {
 
 	public Mediator(int slots, double[] priceLow, double[] priceHigh, double amountMax,
 	                double mutationSigma, double crossoverRate,
-	                double startTemperature, int coolRounds, long seed) {
+	                double startTemperature, int coolRounds, Random rng) {
 		if (priceLow.length != slots || priceHigh.length != slots) {
 			throw new IllegalArgumentException(
 				"Preisband-Länge passt nicht zur Slot-Anzahl – Verhandlung nicht durchführbar.");
@@ -44,7 +44,7 @@ public class Mediator {
 		this.crossoverRate = crossoverRate;
 		this.startTemperature = startTemperature;
 		this.coolRounds = coolRounds;
-		this.rng = new Random(seed);
+		this.rng = rng;
 	}
 
 	public int getSlots() {

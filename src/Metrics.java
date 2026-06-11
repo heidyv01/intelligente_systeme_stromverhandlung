@@ -33,6 +33,13 @@ public class Metrics {
 		return welfare;
 	}
 
+	/** Gesamte Netz-Interaktion [kWh]: Supplier-Einspeisung + Zukäufe beider Seiten (God-View). */
+	public static double gridDependencyKWh(SupplierAgent supplier, CustomerAgent customer, EnergyContract deal) {
+		Battery.Result sd = supplier.dispatch(deal);
+		Battery.Result cd = customer.dispatch(deal);
+		return sd.totalLeftoverSurplus() + sd.totalUnmetDeficit() + cd.totalUnmetDeficit();
+	}
+
 	public static void report(ScenarioGenerator scen, SupplierAgent supplier,
 	                          CustomerAgent customer, EnergyContract deal) {
 		int T = scen.slots;
@@ -48,14 +55,21 @@ public class Metrics {
 		double welfarePct  = welfareOpt - welfareBase != 0.0
 			? 100.0 * (welfareDeal - welfareBase) / (welfareOpt - welfareBase) : 100.0;
 
-		double traded = 0, possible = 0, gridImport = 0, gridExport = 0, overDelivery = 0;
+		// Netz-Kennzahlen NACH Batterie-Dispatch beider Seiten (single-sourced über die Agenten).
+		// Ohne Batterie (capacity 0) entspricht dies exakt max(demand−x,0) bzw. max(generation−x,0).
+		Battery.Result sd = supplier.dispatch(deal);
+		Battery.Result cd = customer.dispatch(deal);
+		double gridExport      = sd.totalLeftoverSurplus();  // Supplier -> Netz (nicht gespeicherter Überschuss)
+		double supplierGridBuy = sd.totalUnmetDeficit();     // Supplier <- Netz (zur Lieferung zugekauft)
+		double customerGridBuy = cd.totalUnmetDeficit();     // Customer <- Netz (ungedeckter Bedarf)
+		double gridImport      = supplierGridBuy + customerGridBuy;
+		double overDelivery    = cd.totalLeftoverSurplus();  // nicht speicherbare Überlieferung
+
+		double traded = 0, possible = 0;
 		for (int t = 0; t < T; t++) {
 			double delivered = deal.amount(t);
-			traded       += Math.min(delivered, Math.min(scen.generation[t], scen.demand[t]));
-			possible     += Math.min(scen.generation[t], scen.demand[t]);
-			gridImport   += Math.max(scen.demand[t] - delivered, 0.0);     // Customer-Defizit aus Netz
-			gridExport   += Math.max(scen.generation[t] - delivered, 0.0); // Supplier-Überschuss ins Netz
-			overDelivery += Math.max(delivered - scen.demand[t], 0.0);     // bezahlt, aber ungenutzt
+			traded   += Math.min(delivered, Math.min(scen.generation[t], scen.demand[t]));
+			possible += Math.min(scen.generation[t], scen.demand[t]);
 		}
 		double matchRate = possible > 0 ? 100.0 * traded / possible : 0.0;
 
@@ -64,12 +78,16 @@ public class Metrics {
 			supplierProfit, supplierBase, (supplierProfit - supplierBase) / 100.0);
 		System.out.printf("Customer-Kosten : %10.1f ct  (Baseline %9.1f)  -> -%7.2f EUR%n",
 			customerCost, customerBase, (customerBase - customerCost) / 100.0);
-		System.out.printf("Sozialwohlstand : %10.1f ct  (Baseline %9.1f, Optimum %9.1f -> %.1f%%)%n",
+		System.out.printf("Sozialwohlstand : %10.1f ct  (Baseline %9.1f, Optimum o. Speicher %9.1f -> %.1f%%)%n",
 			welfareDeal, welfareBase, welfareOpt, welfarePct);
 		System.out.printf("Matching-Rate   : %6.1f%% des möglichen Direkthandels (min(g,d) gedeckt)%n", matchRate);
-		System.out.printf("Überlieferung   : %7.2f kWh (vom Customer bezahlt, aber ungenutzt)%n", overDelivery);
+		System.out.printf("Überlieferung   : %7.2f kWh (geliefert, nicht gebraucht/speicherbar)%n", overDelivery);
 		System.out.printf("Netz-Bezug Rest : %7.2f kWh    Netz-Einspeisung Rest: %7.2f kWh%n",
 			gridImport, gridExport);
+		if (supplier.getBattery().isPresent() || customer.getBattery().isPresent()) {
+			System.out.printf("Batterie SoC Ende: Supplier %5.2f/%.1f kWh, Customer %5.2f/%.1f kWh%n",
+				sd.finalSoc, supplier.getBattery().capacity, cd.finalSoc, customer.getBattery().capacity);
+		}
 
 		boolean irSupplier = supplierProfit >= supplierBase;
 		boolean irCustomer = customerCost <= customerBase;
