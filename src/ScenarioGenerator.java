@@ -45,13 +45,25 @@ public class ScenarioGenerator {
 			double evening = gauss(hour, 19.5, 2.0);
 			demand[t] = round1(0.8 + 4.0 * morning + 6.0 * evening + noise(rng, 0.2));
 
-			// Einspeisevergütung: niedrig und flach
-			feedIn[t] = 8.0;
-
-			// Bezugstarif (Time-of-Use): teurer in den Lastspitzen
-			double peak = Math.max(morning, evening);
-			retail[t] = round1(25.0 + 12.0 * peak);
+			// Dynamisches Preisband nach Tagesphase (Netz-Tarife sind marktweit, nicht kundenspezifisch).
+			double[] band = priceBand(hour);
+			feedIn[t] = band[0]; // f_t: Einspeisevergütung (Untergrenze)
+			retail[t] = band[1]; // r_t: Netzbezugspreis    (Obergrenze)
 		}
+	}
+
+	/**
+	 * Dynamisches Preisband je Tagesphase: { Einspeisevergütung f_t, Netzbezugspreis r_t } [ct/kWh].
+	 * Idee: Nacht günstig & schmal, Mittag (PV-Schwemme am Markt) günstig, Abend-Peak teuer & breit.
+	 * Stets f_t < r_t (sonst gäbe es in dem Slot keine Einigungszone). Die Bandbreite (r_t − f_t) ist
+	 * der pro Slot zu verteilende Mehrwert; das macht abends die Batterie-Arbitrage besonders wertvoll.
+	 */
+	private static double[] priceBand(double hour) {
+		if (hour < 6.0)       return new double[]{ 6.0, 22.0 }; // Nacht:  niedrige Last, billig, schmal
+		else if (hour < 10.0) return new double[]{ 8.0, 30.0 }; // Morgen: Last steigt, teurer
+		else if (hour < 16.0) return new double[]{ 5.0, 20.0 }; // Mittag: PV-Schwemme -> Markt billig
+		else if (hour < 22.0) return new double[]{ 9.0, 38.0 }; // Abend:  Nachfrage-Peak, teuer & breit
+		else                  return new double[]{ 6.0, 22.0 }; // Spätnacht
 	}
 
 	private static double gauss(double x, double mu, double sigma) {

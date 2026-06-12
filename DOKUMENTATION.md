@@ -1,30 +1,25 @@
 # Projektdokumentation – Bilaterale Strom-Verhandlung über einen Mediator
 
-Masterprojekt „Intelligente Systeme". Diese Datei erklärt **Grundidee, Annahmen, Aufbau,
-Methoden, Ergebnis-Interpretation und nächste Schritte** – als Nachschlagewerk für uns und
-als Grundlage, um das Thema dem Prof zu erläutern.
-
-> Begleitdateien: [README.md](README.md) (Brainstorming/Ideen), Konzept-/Designdoc
-> `indexed-tinkering-hellman.md`, Quellcode in [src/](src/).
+Technische Dokumentation des Projekts: Modell, Aufbau, Methoden, Parameter und Auswertung.
+Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 
 ---
 
 ## Inhalt
-1. [Grundidee (Stichpunkte)](#1-grundidee-stichpunkte)
-2. [Annahmen (Stichpunkte)](#2-annahmen-stichpunkte)
-3. [Bestandteile der Verhandlung (Stichpunkte)](#3-bestandteile-der-verhandlung-stichpunkte)
-4. [Die Methoden (für die Erläuterung beim Prof)](#4-die-methoden-für-die-erläuterung-beim-prof)
-5. [Ablauf einer Verhandlung (Schritt für Schritt)](#5-ablauf-einer-verhandlung-schritt-für-schritt)
+1. [Grundidee](#1-grundidee)
+2. [Annahmen](#2-annahmen)
+3. [Bestandteile der Verhandlung](#3-bestandteile-der-verhandlung)
+4. [Methoden](#4-methoden)
+5. [Ablauf einer Verhandlung](#5-ablauf-einer-verhandlung)
 6. [Ergebnisse lesen und einordnen](#6-ergebnisse-lesen-und-einordnen)
-7. [Parameter (Stellschrauben)](#7-parameter-stellschrauben)
-8. [Bekannte Grenzen / offene Punkte](#8-bekannte-grenzen--offene-punkte)
-9. [Wie wir weitermachen (Fahrplan)](#9-wie-wir-weitermachen-fahrplan)
-10. [Glossar](#10-glossar)
-11. [Ausführen](#11-ausführen)
+7. [Parameter](#7-parameter)
+8. [Modellgrenzen / Vereinfachungen](#8-modellgrenzen--vereinfachungen)
+9. [Glossar](#9-glossar)
+10. [Ausführen](#10-ausführen)
 
 ---
 
-## 1. Grundidee (Stichpunkte)
+## 1. Grundidee
 
 - **Use Case:** Peer-to-Peer-Stromhandel. Ein **Supplier** (PV-Überschuss) und ein **Customer**
   (Tagesbedarf) handeln für **einen Tag mit 24 Slots** je Slot eine **Liefermenge** und einen **Preis** aus.
@@ -32,38 +27,40 @@ als Grundlage, um das Thema dem Prof zu erläutern.
   - Supplier: Preis maximieren, Überschuss loswerden.
   - Customer: Preis minimieren, Bedarf decken.
   - Beide: den **teureren Grid-Fallback vermeiden** (Netzbezug teuer, Einspeisung billig).
-- **Verkaufsargument:** Direkter Handel schlägt für **beide** das Netz → Win-Win. Genau dann,
+- **Kernidee:** Direkter Handel schlägt für **beide** das Netz → Win-Win. Genau dann,
   wenn der Preis im Band **Einspeisevergütung < Preis < Netzbezugspreis** liegt.
 - **Bilateral** (genau 2 Parteien) und **Ziele bleiben privat** – der Mediator kennt sie nicht.
-- **Aufbauend auf der Basis** (Klein-Verhandlung): Mechanik beibehalten, Domäne komplett auf Strom umgebaut.
+- **Aufbauend auf der Basis** (Klein-Verhandlung): Mechanik beibehalten, Domäne auf Strom umgebaut.
 
-## 2. Annahmen (Stichpunkte)
+## 2. Annahmen
 
 - **Zeit:** 1 Tag = 24 Slots (stündlich). Ohne Batterie sind die Slots **unabhängig**; mit Batterie **koppelt** der Speicher sie (Überschuss eines Slots deckt ein späteres Defizit).
 - **Kontrakt:** je Slot Menge `x_t` [kWh] **und** Preis `p_t` [ct/kWh] → 48 verhandelte Werte.
 - **Öffentliche Marktdaten** (Mediator + beide kennen sie): Einspeisevergütung `f_t`, Netzbezugspreis `r_t`.
 - **Private Daten** (nur der jeweilige Agent): Erzeugung `g_t` (Supplier), Bedarf `d_t` (Customer).
-- **Preisband fix vorgegeben:** `f_t ≤ p_t ≤ r_t` (durch den Mediator erzwungen, s. u.). `f_t` niedrig (~8 ct),
-  `r_t` höher und in den Lastspitzen teurer (Time-of-Use, ~25–37 ct).
+- **Preisband dynamisch je Tagesphase** (Nacht/Morgen/Mittag/Abend), `f_t ≤ p_t ≤ r_t` (durch den
+  Mediator erzwungen): nachts günstig & schmal, **mittags günstig** (PV-Schwemme am Markt), **abends
+  teuer & breit** (`r_t` bis ~38 ct, `f_t` ~5–9 ct). Spotpreis-Charakter → die Batterie-Arbitrage
+  (mittags speichern → abends nutzen) wird besonders wertvoll.
 - **Keine Netzengpässe:** beliebige Mengen handelbar; Netz ist unbegrenzter Fallback.
 - **Übermenge beim Customer** ist wertlos (Strafkosten `s = 0` als Default), sofern sie nicht in die Batterie passt.
-- **Batterie (optional):** Supplier und Customer haben je einen **privaten** Speicher; `capacity = 0` schaltet ihn aus (= ursprüngliches, slot-unabhängiges Modell).
-- **Daten synthetisch & generiert** (PV-Glocke, Last-Doppelpeak); **voll reproduzierbar** über zwei Seeds (Szenario + Verhandlung).
+- **Batterie (optional):** Supplier und Customer haben je einen **privaten** Speicher; `capacity = 0` schaltet ihn aus (= slot-unabhängiges Modell).
+- **Daten synthetisch & generiert** (PV-Glocke, Last-Doppelpeak); **reproduzierbar** über zwei Seeds (Szenario + Verhandlung).
 - **Kosten der Erzeugung** beim Supplier = 0 (PV); modelliert wird nur der Handel, nicht der Anlagenbetrieb.
 
-## 3. Bestandteile der Verhandlung (Stichpunkte)
+## 3. Bestandteile der Verhandlung
 
 | Komponente | Datei | Rolle |
 |---|---|---|
 | **Kontrakt** | [EnergyContract.java](src/EnergyContract.java) | Eine Tagesvereinbarung: Mengen + Preise (flacher `double[2·24]`). |
-| **Szenario** | [ScenarioGenerator.java](src/ScenarioGenerator.java) | Erzeugt `g_t`, `d_t` (privat) und `f_t`, `r_t` (öffentlich). |
+| **Szenario** | [ScenarioGenerator.java](src/ScenarioGenerator.java) | Erzeugt `g_t`, `d_t` (privat) und das **dynamische Preisband** `f_t`, `r_t` je Tagesphase (öffentlich). |
 | **Agent (abstrakt)** | [Agent.java](src/Agent.java) | Schnittstelle: `utility`, `vote`, `delete`. |
 | **Supplier** | [SupplierAgent.java](src/SupplierAgent.java) | Private Profit-Zielfunktion. |
 | **Customer** | [CustomerAgent.java](src/CustomerAgent.java) | Private Kosten-Zielfunktion. |
 | **Batterie** | [Battery.java](src/Battery.java) | Privater Speicher je Agent: greedy Lade-/Entlade-Dispatch (koppelt Slots). |
 | **Mediator** | [Mediator.java](src/Mediator.java) | **Uninformiert.** Erzeugt Vorschläge (GA-Operatoren) + gibt Annealing-Temperatur vor. |
 | **Verhandlung** | [Verhandlung.java](src/Verhandlung.java) | Hauptschleife: löschen → reproduzieren → abstimmen → archivieren. |
-| **Auswertung** | [Metrics.java](src/Metrics.java) | Kennzahlen & Baseline-/Optimum-Vergleich (nur Analyse, „God-View"). |
+| **Auswertung** | [Metrics.java](src/Metrics.java) | Kennzahlen & Baseline-/Optimum-Vergleich (nur zur Auswertung, nicht Teil der Verhandlung). |
 
 Die **drei Hebel**, an denen man die Verhandlung verändert:
 1. **Wie Vorschläge entstehen** → GA-Operatoren des Mediators (Mutation, Crossover, Init).
@@ -72,15 +69,15 @@ Die **drei Hebel**, an denen man die Verhandlung verändert:
 
 ---
 
-## 4. Die Methoden (für die Erläuterung beim Prof)
+## 4. Methoden
 
-Das Verfahren kombiniert vier bekannte Bausteine. Beim Prof kann man es so einordnen:
+Das Verfahren kombiniert vier Bausteine:
 
 ### 4.1 Mediierte Verhandlung („Annealing Mediator", Klein et al.)
 Ein **neutraler, uninformierter Mediator** schlägt vollständige Kontrakte vor; die Parteien
 **stimmen nur mit Ja/Nein** ab (sie geben ihre Zielfunktion nicht preis). So bleiben die Ziele
 privat – der Mediator weiß nicht, *warum* etwas abgelehnt wird. Referenz: M. Klein et al.,
-*„Negotiating Complex Contracts"* (2003). Das ist unsere **Basis-Architektur**.
+*„Negotiating Complex Contracts"* (2003). Das ist die **Basis-Architektur**.
 
 ### 4.2 Kontrakt-Repräsentation
 Ein Kontrakt ist ein reellwertiger Vektor: 24 Mengen + 24 Preise. Bewusst „flach" gehalten,
@@ -106,8 +103,8 @@ Ein Agent akzeptiert einen Vorschlag relativ zum aktuellen Stand:
 - Die **Temperatur `T`** gibt der Mediator vor und kühlt sie über die Runden auf 0 ab
   (anfangs viel Exploration, am Ende strikt).
 
-Zweck: das **dokumentierte Problem der Basis** (frühe Stagnation, weil nur strikte Verbesserungen
-akzeptiert werden) entschärfen. `T = 0` ⇒ rein gieriges Verhalten wie in der Basis (als Vergleich nutzbar).
+Zweck: das Problem der Basis (frühe Stagnation, weil nur strikte Verbesserungen akzeptiert werden)
+entschärfen. `T = 0` ⇒ rein gieriges Verhalten wie in der Basis (als Vergleich nutzbar).
 
 ### 4.5 Private Zielfunktionen
 Konvention: `utility` – **höher = besser** für beide (vereinheitlicht Abstimmung & Annealing).
@@ -130,33 +127,29 @@ Jeder Agent vergleicht `delivered` nur mit **seiner eigenen** privaten Größe (
 ### 4.6 Warum eine Einigung existiert (Verhandlungszone)
 - Pro Slot lohnt der Deal für **beide** genau dann, wenn `f_t < p_t < r_t` und `x_t ≈ min(g_t, d_t)`.
 - Der Zahlungsterm `delivered·price` ist ein **reiner Transfer** zwischen den beiden – er hebt sich
-  im **Gesamtwohlstand** heraus. Daraus folgt die zentrale Aussage:
+  im **Gesamtwohlstand** heraus. Daraus folgt:
   - **Effizienz** hängt nur an der **Menge**: optimal ist `x_t = min(g_t, d_t)` (so viel wie möglich direkt handeln).
   - **Fairness/Verteilung** hängt nur am **Preis**: *wo* `p_t` im Band `[f_t, r_t]` landet.
-- Fachbegriffe fürs Gespräch: **Individuelle Rationalität** (jeder besser als Netz), **Pareto-Effizienz**,
+- Verwandte Konzepte: **Individuelle Rationalität** (jeder besser als Netz), **Pareto-Effizienz**,
   **soziale Wohlfahrt**, **Zone of Possible Agreement (ZOPA)**.
 
 ### 4.7 Speicher/Batterie (Erweiterung)
 Jeder Agent kann einen **privaten Speicher** (`Battery`) haben, der die Slots koppelt: Überschuss wird
-geladen und in einem späteren Defizit-Slot genutzt. Wichtig: **Kontrakt-Repräsentation und Mediator
-bleiben unverändert** – nur die Zielfunktion wertet den Kontrakt jetzt über einen **greedy Dispatch**
-aus (laden bei Überschuss, entladen bei Defizit; je Slot begrenzt durch `maxPower`, Verluste über den
+geladen und in einem späteren Defizit-Slot genutzt. **Kontrakt-Repräsentation und Mediator bleiben
+unverändert** – nur die Zielfunktion wertet den Kontrakt jetzt über einen **greedy Dispatch** aus
+(laden bei Überschuss, entladen bei Defizit; je Slot begrenzt durch `maxPower`, Verluste über den
 Wirkungsgrad η). `capacity = 0` reproduziert exakt das speicherlose Modell. Effekt: der Supplier
-schiebt Mittags-PV in den Abend-Peak, der Customer puffert Überlieferung → **deutlich geringere
-Netzabhängigkeit** und höherer beidseitiger Nutzen.
-
-**Stichworte zum Nennen:** mediierte Multi-Attribut-Verhandlung (Klein) · genetischer Algorithmus
-(Selektion/Crossover/Mutation) · Simulated Annealing (Metropolis, Kirkpatrick) · Mechanismus-Design
-(Privatheit, IR, Pareto) · Peer-to-Peer-Energiemärkte · Speicher-Dispatch.
+schiebt Mittags-PV in den Abend-Peak, der Customer puffert Überlieferung → **geringere Netzabhängigkeit**
+und höherer beidseitiger Nutzen.
 
 ---
 
-## 5. Ablauf einer Verhandlung (Schritt für Schritt)
+## 5. Ablauf einer Verhandlung
 
 Aus [Verhandlung.java](src/Verhandlung.java), pro Runde (Default: 10 000 Runden):
 
 1. **Temperatur bestimmen:** `T(round)` linear fallend von `startTemperature` auf 0 (bei 60 % der Runden).
-2. **Löschen:** `deletedSize`-mal löscht ein **zufällig gewählter** Agent seinen für ihn schlechtesten Kontrakt.
+2. **Löschen:** `deletedSize`-mal löscht ein zufällig gewählter Agent seinen für ihn schlechtesten Kontrakt.
 3. **Reproduzieren:** Der Mediator füllt die frei gewordenen Plätze per Crossover (Rate 0,5) oder Mutation.
 4. **Abstimmen:** Für jeden Kontrakt der Population: akzeptieren **beide** ihn gegenüber dem aktuellen
    Stand `current` (mit Annealing-Toleranz), wird er der neue `current`.
@@ -166,9 +159,9 @@ Aus [Verhandlung.java](src/Verhandlung.java), pro Runde (Default: 10 000 Runden)
 
 **Ergebnis = `bestEver`** (bzw. `current`, falls nie ein Win-Win-Kontrakt gefunden wurde).
 
-Wichtig: `current` darf durch das Annealing auch mal „bergab" wandern, aber **`bestEver` verschlechtert
-sich nie** (Best-so-far-Archiv aus dem Simulated Annealing). Das gemeldete Ergebnis ist daher immer
-beidseitig vorteilhaft und möglichst effizient.
+`current` darf durch das Annealing auch mal „bergab" wandern, aber **`bestEver` verschlechtert
+sich nie** (Best-so-far-Archiv). Das gemeldete Ergebnis ist daher immer beidseitig vorteilhaft
+und möglichst effizient.
 
 ---
 
@@ -178,16 +171,15 @@ beidseitig vorteilhaft und möglichst effizient.
 Das Programm gibt **zwei Reports** aus (ohne/mit Batterie) plus einen Vergleich. Aufbau eines Reports
 (Beispiel ohne Batterie; dank Seeds reproduzierbar):
 ```
-Supplier-Profit :      694,8 ct  (Baseline     483,2)  -> +   2,12 EUR
-Customer-Kosten :     1953,1 ct  (Baseline    2059,5)  -> -   1,06 EUR
-Sozialwohlstand :    -1258,4 ct  (Baseline   -1576,3, Optimum   -1226,5 -> 90,9%)
-Matching-Rate   :  100,0% des möglichen Direkthandels (min(g,d) gedeckt)
-Überlieferung   :    3,98 kWh (vom Customer bezahlt, aber ungenutzt)
-Netz-Bezug Rest :   37,41 kWh    Netz-Einspeisung Rest:   40,32 kWh
+Supplier-Profit :      378,9 ct  (Baseline     339,4)  -> +   0,39 EUR
+Customer-Kosten :     1718,2 ct  (Baseline    1988,0)  -> -   2,70 EUR
+Sozialwohlstand :    -1339,3 ct  (Baseline   -1648,6, Optimum o. Speicher   -1322,2 -> 94,8%)
+Matching-Rate   :   99,4% des möglichen Direkthandels (min(g,d) gedeckt)
+Überlieferung   :    2,65 kWh (geliefert, nicht gebraucht/speicherbar)
+Netz-Bezug Rest :   47,69 kWh    Netz-Einspeisung Rest:   41,74 kWh
 Win-Win (beide besser als Netz)? Supplier=ja, Customer=ja
 ```
-- **Supplier-Profit / Customer-Kosten + EUR:** absolutes Ergebnis und **Ersparnis gegenüber dem Netz** –
-  die eigentliche „Verkaufszahl".
+- **Supplier-Profit / Customer-Kosten + EUR:** absolutes Ergebnis und **Ersparnis gegenüber dem Netz**.
 - **Sozialwohlstand + %:** wie nah das Ergebnis am theoretischen Effizienz-Optimum liegt (s. u.).
 - **Matching-Rate:** wie viel des **möglichen** Direkthandels `min(g_t, d_t)` tatsächlich gedeckt ist.
 - **Überlieferung:** kWh über dem Bedarf, die der Customer bezahlt, aber nicht braucht (Ineffizienz).
@@ -195,39 +187,37 @@ Win-Win (beide besser als Netz)? Supplier=ja, Customer=ja
 - **Win-Win:** Plausibilitäts-Check – muss für beide „ja" sein, sonst stimmt das Modell nicht.
 
 ### 6.2 Baselines und Optimum (die Bezugsgrößen)
-Ohne diese drei Referenzwerte ist eine Zahl wie „694 ct Profit" bedeutungslos:
+Ohne diese drei Referenzwerte ist eine Zahl wie „379 ct Profit" bedeutungslos:
 - **Supplier-Baseline** = alles einspeisen: `Σ g_t·f_t`. (Was er *ohne* Deal bekäme.)
 - **Customer-Baseline** = alles aus dem Netz: `Σ d_t·r_t`. (Was er *ohne* Deal zahlen müsste.)
-- **Optimum** = Wohlstand bei `x_t = min(g_t, d_t)`: maximal möglicher Direkthandel.
-  Erinnerung: der Preis ist hier egal (reiner Transfer), nur die Menge zählt.
+- **Optimum (ohne Speicher)** = Wohlstand bei `x_t = min(g_t, d_t)`: maximal möglicher Direkthandel.
+  Der Preis ist hier egal (reiner Transfer), nur die Menge zählt.
 
 Das Ergebnis ist gut, wenn beide Baselines geschlagen werden **und** der Wohlstand nahe ans Optimum kommt.
 
 > **Warum darf die Auswertung beide Zielfunktionen sehen, obwohl sie privat sind?**
 > Weil die *Verhandlung selbst* (Mediator + Abstimmung) nie auf fremde Zielinfos zugreift – nur die
-> **Analyse** (`Metrics`, „God-View") rechnet im Nachhinein beide Seiten zusammen, um zu *bewerten*.
-> Privatheit im Mechanismus bleibt also gewahrt.
+> nachgelagerte **Auswertung** (`Metrics`) rechnet beide Seiten zusammen, um das Ergebnis zu bewerten.
+> Die Privatheit im Mechanismus bleibt gewahrt.
 
 ### 6.3 Beispiel-Ergebnis interpretiert
-- **Mengen** `x_t` folgen `min(g_t, d_t)`: nachts wenig (kein PV), mittags PV-Überschuss trifft auf
+- **Mengen** `x_t` folgen `min(g_t, d_t)`: nachts wenig (kein PV), mittags trifft PV-Überschuss auf
   geringen Bedarf → wenig Handel; in den Last-Peaks (morgens/abends) ist wenig PV da → der Customer
   muss Restbedarf aus dem Netz decken. Das **zeitliche Auseinanderfallen** von PV (mittags) und Last
-  (abends) ist genau der spannende Teil und der Grund, warum nicht 100 % direkt gehandelt werden können.
+  (abends) ist der Grund, warum ohne Speicher nicht 100 % direkt gehandelt werden können.
 - **Preise** `p_t` liegen immer im Band – das ist **erzwungen** (Clamping), nicht „erkämpft". Verhandelt
   wird nur die **Lage** im Band (Verteilung des Gewinns).
-- **~90–95 % des Optimums + Win-Win:** solides, plausibles Ergebnis für v1.
 
-### 6.4 Empirische Befunde
-- **Win-Win wird robust erreicht**, Wohlstand ~90–95 % des Optimums, Konvergenz deutlich vor Rundenende.
-- **Annealing ehrlich eingeordnet:** Bei *nur 2 Agenten* + diverser GA-Population stagniert auch die
-  **gierige** Variante (`T = 0`) kaum – die GA-Vielfalt trägt die Suche. Das Annealing ist hier **ein**
-  Hebel von mehreren, kein Wundermittel. Sein Nutzen wächst, je stärker die *Akzeptanz* zum Flaschenhals
-  wird (z. B. mehr Agenten, oder wenn der akzeptierte Konsens die Suche steuert statt einer separaten GA).
-  → Das ist ein **gutes Diskussionsergebnis**, kein Mangel.
+### 6.4 Beobachtungen
+- Win-Win wird über verschiedene Seeds hinweg erreicht; der Sozialwohlstand erreicht ~90–95 % des
+  speicherlosen Optimums – mit Batterie übersteigt er diese Referenz.
+- Bei nur zwei Agenten trägt die Vielfalt der GA-Population die Suche; der Annealing-Anteil (`T > 0`
+  gegenüber `T = 0`) wirkt sich hier nur gering aus. Beide Varianten konvergieren deutlich vor Rundenende.
+- Die Batterie senkt die Netzabhängigkeit deutlich (im Standardlauf ~−30 %) und verbessert beide Seiten.
 
 ---
 
-## 7. Parameter (Stellschrauben)
+## 7. Parameter
 Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 
 | Parameter | Default | Wirkung |
@@ -246,42 +236,14 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 
 ---
 
-## 8. Bekannte Grenzen / offene Punkte
-- **Reproduzierbarkeit: erledigt.** Der gesamte Verhandlungs-Zufall (GA, Votes, Lösch-Münze) läuft über
-  eine geseedete `Random`-Instanz (`negotiationSeed`), das Szenario über `scenarioSeed`. Zwei Läufe sind
-  bit-identisch.
-- **`current` startet beliebig** (zufälliger Kontrakt), nicht am Netz-Status quo – nur das Archiv
-  garantiert Win-Win.
-- **Preisband wird erzwungen**, nicht ausgehandelt – bewusste Vereinfachung, aber dokumentieren.
-- **Greedy-Dispatch der Batterie:** lädt/entlädt gierig, nicht kostenoptimal (z. B. Speicher gezielt für
-  die teuersten Slots aufsparen). Optimaler Dispatch (LP) wäre eine Erweiterung.
-- **Optimum-Referenz ist speicherlos:** die %-Angabe bezieht sich auf das Optimum OHNE Speicher; mit
-  Batterie kann der Wohlstand >100 % erreichen (= sichtbarer Speicher-Gewinn, kein Fehler).
+## 8. Modellgrenzen / Vereinfachungen
+- **Preisband wird erzwungen**, nicht ausgehandelt (Clamping auf `[f_t, r_t]`); verhandelt wird nur die Lage im Band.
+- **Greedy-Batterie-Dispatch:** lädt/entlädt sofort, nicht kostenoptimal (z. B. Speicher gezielt für die teuersten Slots aufsparen).
+- **Optimum-Referenz ist speicherlos:** die %-Angabe bezieht sich auf das Optimum ohne Speicher; mit Batterie kann der Wohlstand >100 % erreichen.
+- **`current` startet bei einem zufälligen Kontrakt**, nicht am Netz-Status-quo; nur das Archiv garantiert ein Win-Win-Ergebnis.
 - **Matching-Rate** misst nur Unterdeckung, nicht Überlieferung (dafür gibt es die separate Zeile).
 
-## 9. Wie wir weitermachen (Fahrplan)
-
-**Kurzfristig (Methodik sauber machen):**
-1. ~~Reproduzierbarkeit fixen~~ ✅ **erledigt** (zwei Seeds, geseedeter Verhandlungs-Stream, Läufe bit-identisch).
-2. **Experimente:** Parameter-Sweeps (`startTemperature`, `mutationSigma`, `crossoverRate`, `popSize`),
-   je *n* Wiederholungen, Mittelwert + Streuung; **Annealing vs. gierig** sauber vergleichen.
-3. **Stagnations-Metrik** definieren (z. B. „Runde, ab der sich `bestEver` nicht mehr verbessert") und plotten.
-4. **CSV-Export + Plots** (Konvergenzkurve, Tagesprofile g/d/x) für den Bericht.
-
-**Mechanik-Varianten (die Hebel ausspielen):**
-5. **Akzeptanz-getriebene Variante:** Mediator mutiert nur den *aktuellen Konsens* statt einer separaten
-   GA-Population → hier wird das Annealing zum Hauptmechanismus.
-6. **Mindestakzeptanzrate** als alternativer Mediator-Hebel (Agent muss Anteil X der Vorschläge akzeptieren).
-
-**Domänen-Erweiterungen (aus unserer [README](README.md)-Ideenliste):**
-7. ~~Batterie/Speicher~~ ✅ **erledigt** (beidseitig, greedy Dispatch; Mit-/Ohne-Vergleich im Output,
-   Netzabhängigkeit ~−32 %). Nächster Schritt hier: optimaler Dispatch + Batterie-Sweeps.
-8. **Variable/realistische Gridkosten**, mehrere Tage hintereinander, je Tag anderes Profil.
-9. **Mehrere/​wechselnde** Supplier & Customer (multilateral) – verändert die Stagnationsdynamik
-   spürbar (hier wird Annealing relevanter).
-10. **Prognose-Unsicherheit** in `g_t`/`d_t` (Robustheit der Verträge).
-
-## 10. Glossar
+## 9. Glossar
 
 | Konzept | Code-Name | Bedeutung | Einheit |
 |---|---|---|---|
@@ -297,9 +259,8 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `T` | `temperature` | Annealing-Temperatur | — |
 | — | `capacity` / `maxPower` / `η` / SoC | Batterie: Kapazität / Lade-Entladeleistung / Wirkungsgrad / Ladestand | kWh / kWh / – / kWh |
 
-## 11. Ausführen
+## 10. Ausführen
 ```powershell
-
 javac -encoding UTF-8 -d bin (Get-ChildItem src\*.java).FullName
 java -cp bin Verhandlung        # Annealing (Default, startTemperature = 250)
 java -cp bin Verhandlung 0      # rein gieriger Vergleichslauf (wie Basis)
