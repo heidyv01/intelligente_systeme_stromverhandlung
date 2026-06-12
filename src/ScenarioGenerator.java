@@ -17,15 +17,21 @@ import java.util.Random;
 public class ScenarioGenerator {
 
 	public final int slots;
-	public final double[] generation; // g_t [kWh]   (privat Supplier)
-	public final double[] demand;     // d_t [kWh]   (privat Customer)
+	public final double[] generation; // g_t echt [kWh]   (privat Supplier, zählt beim Settlement)
+	public final double[] demand;     // d_t echt [kWh]   (privat Customer, zählt beim Settlement)
+	public final double[] generationForecast; // Schätzung von g_t beim Verhandeln [kWh]
+	public final double[] demandForecast;     // Schätzung von d_t beim Verhandeln [kWh]
 	public final double[] feedIn;     // f_t [ct/kWh](öffentlich)
 	public final double[] retail;     // r_t [ct/kWh](öffentlich)
+	public final double forecastSigma; // relativer Prognosefehler (0 = perfekte Prognose)
 
-	public ScenarioGenerator(int slots, long seed) {
+	public ScenarioGenerator(int slots, long seed, double forecastSigma) {
 		this.slots = slots;
+		this.forecastSigma = forecastSigma;
 		this.generation = new double[slots];
 		this.demand = new double[slots];
+		this.generationForecast = new double[slots];
+		this.demandForecast = new double[slots];
 		this.feedIn = new double[slots];
 		this.retail = new double[slots];
 		build(seed);
@@ -50,6 +56,18 @@ public class ScenarioGenerator {
 			feedIn[t] = band[0]; // f_t: Einspeisevergütung (Untergrenze)
 			retail[t] = band[1]; // r_t: Netzbezugspreis    (Obergrenze)
 		}
+
+		// Forecasts SEPARAT nach allen Real-Werten ziehen: so bleiben die echten Profile unabhängig von σ
+		// und reproduzieren (bei σ = 0) exakt das Modell ohne Prognose-Unsicherheit.
+		for (int t = 0; t < slots; t++) {
+			generationForecast[t] = forecast(rng, generation[t], forecastSigma);
+			demandForecast[t]     = forecast(rng, demand[t], forecastSigma);
+		}
+	}
+
+	/** Schätzwert = echter Wert · (1 + N(0, σ)), nicht-negativ. */
+	private static double forecast(Random rng, double real, double sigma) {
+		return round1(real * (1.0 + rng.nextGaussian() * sigma));
 	}
 
 	/**

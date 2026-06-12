@@ -22,7 +22,8 @@ import java.util.Random;
  * Reproduzierbarkeit: getrennte Seeds für Szenario und Verhandlung; der gesamte
  * Verhandlungs-Zufall (GA, Votes, Lösch-Münze) läuft über EINE geseedete Random-Instanz.
  *
- * CLI (optional): args[0]=startTemperature, args[1]=negotiationSeed, args[2]=scenarioSeed.
+ * CLI (optional): args[0]=startTemperature, args[1]=negotiationSeed, args[2]=scenarioSeed,
+ *                 args[3]=forecastSigma, args[4]=imbalancePrice.
  */
 public class Verhandlung {
 
@@ -34,15 +35,19 @@ public class Verhandlung {
 	private static final double MUTATION_SIGMA = 0.08;  // Mutationsstärke (Anteil der Spanne)
 	private static final double CROSSOVER_RATE = 0.5;   // Anteil Crossover vs. Mutation
 	private static final int    COOL_ROUNDS   = (int) (0.6 * MAX_ROUNDS); // Annealing-Abkühlung
+	private static final double FORECAST_SIGMA  = 0.15; // relativer Prognosefehler (Day-Ahead, 0 = perfekt)
+	private static final double IMBALANCE_PRICE = 20.0; // α: Strafe je kWh Imbalance [ct/kWh] (0 = aus)
 
 	public static void main(String[] args) {
 		// Annealing-Start (0 = rein gierig wie Basis) + Seeds, optional per Argument.
 		double startTemperature = (args.length > 0) ? Double.parseDouble(args[0]) : 250.0;
 		long   negotiationSeed  = (args.length > 1) ? Long.parseLong(args[1])     : 1L;
 		long   scenarioSeed     = (args.length > 2) ? Long.parseLong(args[2])     : 42L;
+		double forecastSigma    = (args.length > 3) ? Double.parseDouble(args[3]) : FORECAST_SIGMA;
+		double imbalancePrice   = (args.length > 4) ? Double.parseDouble(args[4]) : IMBALANCE_PRICE;
 
-		// Szenario EINMAL erzeugen (beide Läufe verhandeln dasselbe).
-		ScenarioGenerator scen = new ScenarioGenerator(T, scenarioSeed);
+		// Szenario EINMAL erzeugen (beide Läufe verhandeln dasselbe, inkl. Forecast-Profile).
+		ScenarioGenerator scen = new ScenarioGenerator(T, scenarioSeed, forecastSigma);
 
 		// Batterie-Konfiguration: capacity, maxPower [kWh/Slot], round-trip-η, initialSoc.
 		Battery noBattery       = Battery.none();
@@ -50,13 +55,13 @@ public class Verhandlung {
 		Battery customerBattery = new Battery( 5.0, 3.0, 0.95, 0.0);
 
 		System.out.println("########## LAUF 1: OHNE Batterie (Referenz) ##########");
-		Outcome ref = runNegotiation(scen, noBattery, noBattery, negotiationSeed, startTemperature, true);
+		Outcome ref = runNegotiation(scen, noBattery, noBattery, negotiationSeed, startTemperature, imbalancePrice, true);
 		System.out.println();
 		Metrics.report(scen, ref.supplier, ref.customer, ref.deal);
 
 		System.out.println();
 		System.out.println("########## LAUF 2: MIT Batterie (Supplier + Customer) ##########");
-		Outcome bat = runNegotiation(scen, supplierBattery, customerBattery, negotiationSeed, startTemperature, true);
+		Outcome bat = runNegotiation(scen, supplierBattery, customerBattery, negotiationSeed, startTemperature, imbalancePrice, true);
 		System.out.println();
 		Metrics.report(scen, bat.supplier, bat.customer, bat.deal);
 
@@ -66,12 +71,17 @@ public class Verhandlung {
 
 	/** Ein vollständiger Verhandlungslauf. Liefert den Deal + die (privaten) Agenten zur Auswertung. */
 	static Outcome runNegotiation(ScenarioGenerator scen, Battery supplierBat, Battery customerBat,
-	                              long negotiationSeed, double startTemperature, boolean verbose) {
+	                              long negotiationSeed, double startTemperature, double imbalancePrice,
+	                              boolean verbose) {
 		// Frische, geseedete Zufallsquelle -> Lauf ist reproduzierbar und (bei gleichem Seed) vergleichbar.
 		Random rng = new Random(negotiationSeed);
 
-		SupplierAgent supplier = new SupplierAgent(scen.generation, scen.feedIn, scen.retail, supplierBat, rng);
-		CustomerAgent customer = new CustomerAgent(scen.demand, scen.retail, 0.0, customerBat, rng);
+		// Bei aktiver Imbalance-Strafe sichern die Agenten ihr Forecast-Profil um σ ab (konservativeres Bieten).
+		double hedgeFraction = (imbalancePrice > 0.0) ? scen.forecastSigma : 0.0;
+		SupplierAgent supplier = new SupplierAgent(scen.generation, scen.generationForecast,
+			scen.feedIn, scen.retail, supplierBat, rng, imbalancePrice, hedgeFraction);
+		CustomerAgent customer = new CustomerAgent(scen.demand, scen.demandForecast,
+			scen.retail, 0.0, customerBat, rng, imbalancePrice, hedgeFraction);
 
 		double amountMax = 1.5 * Math.max(maxOf(scen.generation), maxOf(scen.demand));
 		Mediator med = new Mediator(T, scen.feedIn, scen.retail, amountMax,
@@ -80,15 +90,12 @@ public class Verhandlung {
 		EnergyContract[] pop = new EnergyContract[POP_SIZE];
 		for (int i = 0; i < pop.length; i++) pop[i] = med.initContract();
 
-		double supplierBase = Metrics.supplierBaseline(scen);
-		double customerBase = Metrics.customerBaseline(scen);
-
 		EnergyContract current  = pop[0];
 		EnergyContract bestEver = null;            // bestes beidseitig vorteilhaftes Ergebnis
 		double bestWelfare = Double.NEGATIVE_INFINITY;
 
 		if (verbose) {
-			System.out.println(" Runde |   Profit(S) |   Kosten(C) |   Temp");
+			System.out.println(" Runde | Profit(S) € | Kosten(C) € |   Temp");
 			System.out.println("-------+-------------+-------------+--------");
 		}
 
@@ -110,8 +117,8 @@ public class Verhandlung {
 				if (prop == null) continue;
 				if (supplier.vote(current, prop, temp) && customer.vote(current, prop, temp)) {
 					current = prop;
-					// Archiv: nur Win-Win-Kontrakte (beide besser als Netz), dort max. Effizienz
-					if (supplier.utility(prop) >= supplierBase && customer.cost(prop) <= customerBase) {
+					// Archiv: nur Win-Win-Kontrakte (beide besser als Netz, aus Verhandlungssicht), dort max. Effizienz
+					if (supplier.utility(prop) >= supplier.baseline() && customer.cost(prop) <= customer.baseline()) {
 						double w = supplier.utility(prop) - customer.cost(prop); // Sozialwohlstand
 						if (w > bestWelfare) { bestWelfare = w; bestEver = prop; }
 					}
@@ -131,18 +138,18 @@ public class Verhandlung {
 
 	/** Gegenüberstellung der beiden Läufe – zeigt den Mehrwert der Batterie. */
 	private static void compare(ScenarioGenerator scen, Outcome ref, Outcome bat) {
-		double profitRef = ref.supplier.utility(ref.deal);
-		double profitBat = bat.supplier.utility(bat.deal);
-		double costRef   = ref.customer.cost(ref.deal);
-		double costBat   = bat.customer.cost(bat.deal);
+		double profitRef = ref.supplier.settledProfit(ref.deal);
+		double profitBat = bat.supplier.settledProfit(bat.deal);
+		double costRef   = ref.customer.settledCost(ref.deal);
+		double costBat   = bat.customer.settledCost(bat.deal);
 		double gridRef   = Metrics.gridDependencyKWh(ref.supplier, ref.customer, ref.deal);
 		double gridBat   = Metrics.gridDependencyKWh(bat.supplier, bat.customer, bat.deal);
 
 		System.out.println("================ Vergleich: Batterie-Mehrwert ================");
-		System.out.printf("Supplier-Profit : ohne %9.1f  ->  mit %9.1f ct   (%+.2f EUR)%n",
-			profitRef, profitBat, (profitBat - profitRef) / 100.0);
-		System.out.printf("Customer-Kosten : ohne %9.1f  ->  mit %9.1f ct   (%+.2f EUR)%n",
-			costRef, costBat, -(costBat - costRef) / 100.0);
+		System.out.printf("Supplier-Profit : ohne %6.2f  ->  mit %6.2f EUR   (%+.2f EUR)%n",
+			profitRef / 100.0, profitBat / 100.0, (profitBat - profitRef) / 100.0);
+		System.out.printf("Customer-Kosten : ohne %6.2f  ->  mit %6.2f EUR   (%+.2f EUR)%n",
+			costRef / 100.0, costBat / 100.0, -(costBat - costRef) / 100.0);
 		System.out.printf("Netz-Abhängigkeit: ohne %8.2f  ->  mit %8.2f kWh   (%+.2f kWh)%n",
 			gridRef, gridBat, gridBat - gridRef);
 		System.out.println("==============================================================");
@@ -156,8 +163,8 @@ public class Verhandlung {
 
 	private static void logRound(int round, SupplierAgent s, CustomerAgent c,
 	                             EnergyContract k, double temp) {
-		System.out.printf("%6d | %11.1f | %11.1f | %6.1f%n",
-			round, s.utility(k), c.cost(k), temp);
+		System.out.printf("%6d | %11.2f | %11.2f | %6.1f%n",
+			round, s.utility(k) / 100.0, c.cost(k) / 100.0, temp);
 	}
 
 	/** Ergebnis eines Laufs: der ausgehandelte Deal samt der (privaten) Agenten zur Auswertung. */

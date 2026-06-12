@@ -38,6 +38,9 @@ Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 - **Kontrakt:** je Slot Menge `x_t` [kWh] **und** Preis `p_t` [ct/kWh] → 48 verhandelte Werte.
 - **Öffentliche Marktdaten** (Mediator + beide kennen sie): Einspeisevergütung `f_t`, Netzbezugspreis `r_t`.
 - **Private Daten** (nur der jeweilige Agent): Erzeugung `g_t` (Supplier), Bedarf `d_t` (Customer).
+- **Day-Ahead / Prognose-Unsicherheit (optional):** Beim Verhandeln kennen die Agenten ihre Profile nur als
+  **Forecast** (`real · (1+N(0,σ))`, σ-Default 0,15); die **echten** Werte zählen erst beim **Settlement**.
+  σ = 0 ⇒ Forecast = Real (kein Effekt).
 - **Preisband dynamisch je Tagesphase** (Nacht/Morgen/Mittag/Abend), `f_t ≤ p_t ≤ r_t` (durch den
   Mediator erzwungen): nachts günstig & schmal, **mittags günstig** (PV-Schwemme am Markt), **abends
   teuer & breit** (`r_t` bis ~38 ct, `f_t` ~5–9 ct). Spotpreis-Charakter → die Batterie-Arbitrage
@@ -142,6 +145,15 @@ Wirkungsgrad η). `capacity = 0` reproduziert exakt das speicherlose Modell. Eff
 schiebt Mittags-PV in den Abend-Peak, der Customer puffert Überlieferung → **geringere Netzabhängigkeit**
 und höherer beidseitiger Nutzen.
 
+### 4.8 Prognose-Unsicherheit & Imbalance Settlement (Erweiterung)
+Day-Ahead schließen die Parteien Verträge auf **Schätzwerten** (Forecast) ab; die echte Lieferung weicht
+durch Prognosefehler ab. Modell:
+- **Verhandlung** auf dem Forecast (bei aktiver Strafe um σ **abgesichert** → konservativeres Bieten).
+- **Settlement** mit den echten Profilen über die vorhandene `f_t`/`r_t`-Fallback-Mechanik (Stufe 1),
+  plus **Imbalance-Strafe** `α` je kWh unerwarteter Netzabweichung (Stufe 2). σ = 0 bzw. α = 0 schalten
+  den Effekt aus.
+- Die **Batterie puffert Prognosefehler** und senkt damit die Imbalance-Strafe.
+
 ---
 
 ## 5. Ablauf einer Verhandlung
@@ -168,26 +180,35 @@ und möglichst effizient.
 ## 6. Ergebnisse lesen und einordnen
 
 ### 6.1 Die Kennzahlen im Report
-Das Programm gibt **zwei Reports** aus (ohne/mit Batterie) plus einen Vergleich. Aufbau eines Reports
-(Beispiel ohne Batterie; dank Seeds reproduzierbar):
+Das Programm gibt **zwei Reports** aus (ohne/mit Batterie) plus einen Vergleich. Die Werte sind die
+**realisierten** (Settlement-)Werte. Geldbeträge in **EUR**, Stückpreise in **ct/kWh**, Energie in **kWh**.
+Beispiel mit Batterie (dank Seeds reproduzierbar):
 ```
-Supplier-Profit :      378,9 ct  (Baseline     339,4)  -> +   0,39 EUR
-Customer-Kosten :     1718,2 ct  (Baseline    1988,0)  -> -   2,70 EUR
-Sozialwohlstand :    -1339,3 ct  (Baseline   -1648,6, Optimum o. Speicher   -1322,2 -> 94,8%)
-Matching-Rate   :   99,4% des möglichen Direkthandels (min(g,d) gedeckt)
-Überlieferung   :    2,65 kWh (geliefert, nicht gebraucht/speicherbar)
-Netz-Bezug Rest :   47,69 kWh    Netz-Einspeisung Rest:   41,74 kWh
+Supplier-Profit :     5,70 EUR  (Netz   3,39,  ggü. Netz  +2,30 EUR)
+Customer-Kosten :    16,09 EUR  (Netz  19,88,  ggü. Netz  +3,79 EUR)
+Sozialwohlstand :   -10,39 EUR  (Netz -16,49, Optimum o. Speicher -13,22 -> 186,7%)
+Matching-Rate   :   95,0% des möglichen Direkthandels (min(g,d) gedeckt)
+Überlieferung   :    3,16 kWh (geliefert, nicht gebraucht/speicherbar)
+Netz-Bezug Rest :   33,97 kWh    Netz-Einspeisung Rest:   26,09 kWh
+Batterie SoC Ende: Supplier  0,00/10,0 kWh, Customer  0,33/5,0 kWh
 Win-Win (beide besser als Netz)? Supplier=ja, Customer=ja
+Erwartet->Real. : Profit   7,03->  5,70 EUR,  Kosten  14,43-> 16,09 EUR
+Prognosefehler  : Supplier   7,30 kWh, Customer   6,30 kWh
+Imbalance-Strafe: Supplier   1,14 EUR, Customer   0,71 EUR
 ```
-- **Supplier-Profit / Customer-Kosten + EUR:** absolutes Ergebnis und **Ersparnis gegenüber dem Netz**.
-- **Sozialwohlstand + %:** wie nah das Ergebnis am theoretischen Effizienz-Optimum liegt (s. u.).
+- **Supplier-Profit / Customer-Kosten + EUR:** realisiertes Ergebnis und **Ersparnis gegenüber dem Netz**.
+- **Sozialwohlstand + %:** wie nah das Ergebnis am Effizienz-Optimum liegt (mit Speicher >100 % möglich).
 - **Matching-Rate:** wie viel des **möglichen** Direkthandels `min(g_t, d_t)` tatsächlich gedeckt ist.
 - **Überlieferung:** kWh über dem Bedarf, die der Customer bezahlt, aber nicht braucht (Ineffizienz).
 - **Netz-Bezug/-Einspeisung Rest:** verbleibende Grid-Abhängigkeit (Ziel: minimieren).
-- **Win-Win:** Plausibilitäts-Check – muss für beide „ja" sein, sonst stimmt das Modell nicht.
+- **Win-Win:** Plausibilitäts-Check – muss für beide „ja" sein.
+- **Erwartet→Real.:** was die Agenten beim Abschluss (Forecast) erwarteten vs. was nach dem Settlement
+  herauskam – die Differenz ist der Effekt der Prognosefehler.
+- **Prognosefehler / Imbalance-Strafe:** Volumen der Fehlprognose [kWh] und die dafür fällige Strafe [EUR].
+  Ohne Batterie kippt der Supplier dadurch oft ins Minus; die Batterie puffert den Fehler ab.
 
 ### 6.2 Baselines und Optimum (die Bezugsgrößen)
-Ohne diese drei Referenzwerte ist eine Zahl wie „379 ct Profit" bedeutungslos:
+Ohne diese drei Referenzwerte ist eine Zahl wie „5,70 EUR Profit" bedeutungslos:
 - **Supplier-Baseline** = alles einspeisen: `Σ g_t·f_t`. (Was er *ohne* Deal bekäme.)
 - **Customer-Baseline** = alles aus dem Netz: `Σ d_t·r_t`. (Was er *ohne* Deal zahlen müsste.)
 - **Optimum (ohne Speicher)** = Wohlstand bei `x_t = min(g_t, d_t)`: maximal möglicher Direkthandel.
@@ -233,6 +254,8 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `negotiationSeed` | 1 | Seed des Verhandlungs-Zufalls: GA, Votes, Lösch-Münze (auch Arg `[1]`). |
 | Batterie Supplier | 10 kWh, 3 kW, η 0,95 | `capacity`, `maxPower`, `roundTripEfficiency`; `capacity=0` = aus. |
 | Batterie Customer | 5 kWh, 3 kW, η 0,95 | dito; eigener privater Speicher. |
+| `forecastSigma` | 0,15 | relativer Prognosefehler (Day-Ahead); 0 = perfekte Prognose. Arg `[3]`. |
+| `imbalancePrice` | 20 | α: Strafe je kWh Imbalance [ct/kWh]; 0 = aus. Arg `[4]`. |
 
 ---
 
@@ -242,6 +265,9 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 - **Optimum-Referenz ist speicherlos:** die %-Angabe bezieht sich auf das Optimum ohne Speicher; mit Batterie kann der Wohlstand >100 % erreichen.
 - **`current` startet bei einem zufälligen Kontrakt**, nicht am Netz-Status-quo; nur das Archiv garantiert ein Win-Win-Ergebnis.
 - **Matching-Rate** misst nur Unterdeckung, nicht Überlieferung (dafür gibt es die separate Zeile).
+- **Konservatives Bieten** ist als fester Hedge modelliert (Forecast um σ abgesichert), nicht aus einer
+  stochastischen Optimierung abgeleitet; die Imbalance-Strafe `α` ist kalibriert (Default 20), nicht aus
+  realen Imbalance-Preisen übernommen.
 
 ## 9. Glossar
 
@@ -254,10 +280,13 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `f_t` | `feedInTariff` / `feedIn` | Einspeisevergütung (öffentlich, niedrig) | ct/kWh |
 | `r_t` | `retailPrice` / `retail` / `gridBuyPrice` | Netzbezugspreis (öffentlich, hoch) | ct/kWh |
 | `s` | `surplusPenalty` | Strafkosten je überschüssiger kWh (Default 0) | ct/kWh |
-| `U_S` | `utility` (Supplier) | Profit (höher = besser) | ct |
-| `C_C` | `cost` (Customer) | Kosten (niedriger = besser); `utility = −cost` | ct |
+| `U_S` | `utility` (Supplier) | Profit (höher = besser); intern ct, Ausgabe EUR | ct / EUR |
+| `C_C` | `cost` (Customer) | Kosten (niedriger = besser); `utility = −cost` | ct / EUR |
 | `T` | `temperature` | Annealing-Temperatur | — |
 | — | `capacity` / `maxPower` / `η` / SoC | Batterie: Kapazität / Lade-Entladeleistung / Wirkungsgrad / Ladestand | kWh / kWh / – / kWh |
+| forecast | `generationForecast` / `demandForecast` | Schätzung von `g_t`/`d_t` beim Verhandeln | kWh |
+| `σ` | `forecastSigma` | relativer Prognosefehler | – |
+| `α` | `imbalancePrice` | Strafe je kWh unerwarteter Netzabweichung | ct/kWh |
 
 ## 10. Ausführen
 ```powershell

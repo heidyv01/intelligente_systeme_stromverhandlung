@@ -44,8 +44,11 @@ public class Metrics {
 	                          CustomerAgent customer, EnergyContract deal) {
 		int T = scen.slots;
 
-		double supplierProfit = supplier.utility(deal);
-		double customerCost   = customer.cost(deal);
+		// Settlement-Sicht: realisierte Werte (echte Profile + Imbalance-Strafe).
+		double supplierProfit = supplier.settledProfit(deal);
+		double customerCost   = customer.settledCost(deal);
+		double expSupplier    = supplier.expectedProfit(deal); // erwartet (auf Forecast, ohne Strafe)
+		double expCustomer    = customer.expectedCost(deal);
 		double supplierBase   = supplierBaseline(scen);
 		double customerBase   = customerBaseline(scen);
 
@@ -73,13 +76,13 @@ public class Metrics {
 		}
 		double matchRate = possible > 0 ? 100.0 * traded / possible : 0.0;
 
-		System.out.println("================== Verhandlungsergebnis ==================");
-		System.out.printf("Supplier-Profit : %10.1f ct  (Baseline %9.1f)  -> +%7.2f EUR%n",
-			supplierProfit, supplierBase, (supplierProfit - supplierBase) / 100.0);
-		System.out.printf("Customer-Kosten : %10.1f ct  (Baseline %9.1f)  -> -%7.2f EUR%n",
-			customerCost, customerBase, (customerBase - customerCost) / 100.0);
-		System.out.printf("Sozialwohlstand : %10.1f ct  (Baseline %9.1f, Optimum o. Speicher %9.1f -> %.1f%%)%n",
-			welfareDeal, welfareBase, welfareOpt, welfarePct);
+		System.out.println("============= Ergebnis (realisiert / Settlement) =============");
+		System.out.printf("Supplier-Profit : %8.2f EUR  (Netz %6.2f,  ggü. Netz %+6.2f EUR)%n",
+			supplierProfit / 100.0, supplierBase / 100.0, (supplierProfit - supplierBase) / 100.0);
+		System.out.printf("Customer-Kosten : %8.2f EUR  (Netz %6.2f,  ggü. Netz %+6.2f EUR)%n",
+			customerCost / 100.0, customerBase / 100.0, (customerBase - customerCost) / 100.0);
+		System.out.printf("Sozialwohlstand : %8.2f EUR  (Netz %6.2f, Optimum o. Speicher %6.2f -> %.1f%%)%n",
+			welfareDeal / 100.0, welfareBase / 100.0, welfareOpt / 100.0, welfarePct);
 		System.out.printf("Matching-Rate   : %6.1f%% des möglichen Direkthandels (min(g,d) gedeckt)%n", matchRate);
 		System.out.printf("Überlieferung   : %7.2f kWh (geliefert, nicht gebraucht/speicherbar)%n", overDelivery);
 		System.out.printf("Netz-Bezug Rest : %7.2f kWh    Netz-Einspeisung Rest: %7.2f kWh%n",
@@ -93,6 +96,17 @@ public class Metrics {
 		boolean irCustomer = customerCost <= customerBase;
 		System.out.printf("Win-Win (beide besser als Netz)? Supplier=%s, Customer=%s%n",
 			irSupplier ? "ja" : "NEIN", irCustomer ? "ja" : "NEIN");
+
+		// Prognosefehler / Imbalance (nur wenn Unsicherheit aktiv)
+		double fcErrS = supplier.forecastErrorKWh();
+		double fcErrC = customer.forecastErrorKWh();
+		if (fcErrS + fcErrC > 0.001) {
+			System.out.printf("Erwartet->Real. : Profit %6.2f->%6.2f EUR,  Kosten %6.2f->%6.2f EUR%n",
+				expSupplier / 100.0, supplierProfit / 100.0, expCustomer / 100.0, customerCost / 100.0);
+			System.out.printf("Prognosefehler  : Supplier %6.2f kWh, Customer %6.2f kWh%n", fcErrS, fcErrC);
+			System.out.printf("Imbalance-Strafe: Supplier %6.2f EUR, Customer %6.2f EUR%n",
+				supplier.imbalancePenalty(deal) / 100.0, customer.imbalancePenalty(deal) / 100.0);
+		}
 		System.out.println("----------------------------------------------------------");
 		printContract(scen, deal);
 	}
