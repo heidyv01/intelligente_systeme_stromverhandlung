@@ -1,3 +1,8 @@
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.Locale;
+
 /**
  * Auswertung des Verhandlungsergebnisses (God-View).
  *
@@ -118,6 +123,85 @@ public class Metrics {
 			System.out.printf("%4d | %5.1f | %5.1f | %5.1f | %6.1f  [%4.1f..%5.1f]%n",
 				t, scen.generation[t], scen.demand[t], contract.amount(t), contract.price(t),
 				scen.feedIn[t], scen.retail[t]);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// CSV-Export (für Python-Visualisierung)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Schreibt zwei CSV-Dateien in outputDir:
+	 *   slots_data.csv   – je Slot: Profile + beide Vertragsvarianten + Batterie-Dispatch
+	 *   summary_data.csv – Zusammenfassung beider Läufe (Gewinn, Kosten, Wohlstand, Netz)
+	 */
+	public static void writeCSV(ScenarioGenerator scen,
+	                             SupplierAgent refSupplier, CustomerAgent refCustomer, EnergyContract refDeal,
+	                             SupplierAgent batSupplier, CustomerAgent batCustomer, EnergyContract batDeal,
+	                             String outputDir) {
+		try {
+			Files.createDirectories(Paths.get(outputDir));
+
+			// --- slots_data.csv ---
+			Battery.Result refSD = refSupplier.dispatch(refDeal);
+			Battery.Result refCD = refCustomer.dispatch(refDeal);
+			Battery.Result batSD = batSupplier.dispatch(batDeal);
+			Battery.Result batCD = batCustomer.dispatch(batDeal);
+
+			try (PrintWriter pw = new PrintWriter(new FileWriter(outputDir + "/slots_data.csv"))) {
+				pw.println("slot,generation,demand,feedIn,retail,"
+					+ "ref_amount,ref_price,ref_supplier_surplus,ref_customer_deficit,"
+					+ "bat_amount,bat_price,bat_supplier_surplus,bat_customer_deficit");
+				for (int t = 0; t < scen.slots; t++) {
+					pw.printf(Locale.US, "%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f%n",
+						t,
+						scen.generation[t], scen.demand[t], scen.feedIn[t], scen.retail[t],
+						refDeal.amount(t), refDeal.price(t),
+						refSD.leftoverSurplus[t], refCD.unmetDeficit[t],
+						batDeal.amount(t), batDeal.price(t),
+						batSD.leftoverSurplus[t], batCD.unmetDeficit[t]);
+				}
+			}
+
+			// --- summary_data.csv ---
+			double refProfitEUR  = refSupplier.settledProfit(refDeal) / 100.0;
+			double refCostEUR    = refCustomer.settledCost(refDeal)   / 100.0;
+			double batProfitEUR  = batSupplier.settledProfit(batDeal) / 100.0;
+			double batCostEUR    = batCustomer.settledCost(batDeal)   / 100.0;
+			double baselineS     = supplierBaseline(scen) / 100.0;
+			double baselineC     = customerBaseline(scen) / 100.0;
+			double welfOpt       = optimalWelfare(scen) / 100.0;
+			double welfBase      = baselineS - baselineC;
+			double gridRef       = gridDependencyKWh(refSupplier, refCustomer, refDeal);
+			double gridBat       = gridDependencyKWh(batSupplier, batCustomer, batDeal);
+
+			// Matching-Rate per run
+			int T = scen.slots;
+			double refTraded = 0, batTraded = 0, possible = 0;
+			for (int t = 0; t < T; t++) {
+				double pot = Math.min(scen.generation[t], scen.demand[t]);
+				refTraded += Math.min(refDeal.amount(t), pot);
+				batTraded += Math.min(batDeal.amount(t), pot);
+				possible  += pot;
+			}
+			double refMatch = possible > 0 ? 100.0 * refTraded / possible : 0.0;
+			double batMatch = possible > 0 ? 100.0 * batTraded / possible : 0.0;
+
+			try (PrintWriter pw = new PrintWriter(new FileWriter(outputDir + "/summary_data.csv"))) {
+				pw.println("run,supplier_profit_eur,supplier_baseline_eur,customer_cost_eur,"
+					+ "customer_baseline_eur,welfare_eur,welfare_baseline_eur,welfare_optimal_eur,"
+					+ "grid_kwh,match_rate_pct");
+				pw.printf(Locale.US, "ohne Batterie,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f%n",
+					refProfitEUR, baselineS, refCostEUR, baselineC,
+					refProfitEUR - refCostEUR, welfBase, welfOpt, gridRef, refMatch);
+				pw.printf(Locale.US, "mit Batterie,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f%n",
+					batProfitEUR, baselineS, batCostEUR, baselineC,
+					batProfitEUR - batCostEUR, welfBase, welfOpt, gridBat, batMatch);
+			}
+
+			System.out.println("[CSV] Geschrieben: " + outputDir + "/slots_data.csv, summary_data.csv");
+		} catch (IOException e) {
+			System.err.println("[CSV] Fehler beim Schreiben: " + e.getMessage());
 		}
 	}
 }

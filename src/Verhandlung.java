@@ -67,6 +67,12 @@ public class Verhandlung {
 
 		System.out.println();
 		compare(scen, ref, bat);
+
+		// CSV für Python-Visualisierung
+		Metrics.writeCSV(scen,
+			ref.supplier, ref.customer, ref.deal,
+			bat.supplier, bat.customer, bat.deal,
+			"results");
 	}
 
 	/** Ein vollständiger Verhandlungslauf. Liefert den Deal + die (privaten) Agenten zur Auswertung. */

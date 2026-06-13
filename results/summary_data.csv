@@ -1,0 +1,3 @@
+run,supplier_profit_eur,supplier_baseline_eur,customer_cost_eur,customer_baseline_eur,welfare_eur,welfare_baseline_eur,welfare_optimal_eur,grid_kwh,match_rate_pct
+ohne Batterie,2.2913,3.3940,18.2986,19.8800,-16.0073,-16.4860,-13.2220,88.3210,99.32
+mit Batterie,5.6952,3.3940,16.0868,19.8800,-10.3915,-16.4860,-13.2220,60.0600,95.03
