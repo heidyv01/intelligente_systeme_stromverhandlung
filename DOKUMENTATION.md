@@ -150,9 +150,33 @@ Day-Ahead schließen die Parteien Verträge auf **Schätzwerten** (Forecast) ab;
 durch Prognosefehler ab. Modell:
 - **Verhandlung** auf dem Forecast (bei aktiver Strafe um σ **abgesichert** → konservativeres Bieten).
 - **Settlement** mit den echten Profilen über die vorhandene `f_t`/`r_t`-Fallback-Mechanik (Stufe 1),
-  plus **Imbalance-Strafe** `α` je kWh unerwarteter Netzabweichung (Stufe 2). σ = 0 bzw. α = 0 schalten
-  den Effekt aus.
+  plus **Imbalance-Strafe** `α` je kWh **Kontrakt-Fehlmenge** (unerwartete Liefer-Unterdeckung gegenüber
+  dem Forecast, x-abhängig) (Stufe 2). σ = 0 bzw. α = 0 schalten den Effekt aus.
 - Die **Batterie puffert Prognosefehler** und senkt damit die Imbalance-Strafe.
+
+### 4.9 Mehrtägiges Lernen der Prognosegüte (adaptive σ-Schätzung)
+Realistisch kennt ein Agent sein wahres σ nicht, sondern **lernt** es über mehrere Tage: nach jedem
+Settlement beobachtet er seine relativen Prognosefehler und aktualisiert eine Schätzung σ̂ (laufende
+Streuung), mit der er am nächsten Tag hedged. σ̂ startet bei 0 (naiv) und konvergiert gegen σ.
+Treiber: [MehrtagesVerhandlung.java](src/MehrtagesVerhandlung.java). Drei Strategien auf derselben
+Tagesfolge (gleiche Seeds, nur der Hedge unterscheidet sich): **Naiv** (σ̂ ≡ 0), **Learner** (σ̂ adaptiv),
+**Oracle** (σ̂ ≡ σ).
+
+Ergebnis (30 Tage, ohne Batterie, EUR; Welfare = Profit − Kosten):
+
+| Strategie | Supplier-Profit | Customer-Kosten | Imbalance | Welfare |
+|---|---|---|---|---|
+| Naiv    | 111,98 | 738,69 | 211,50 | −626,7 |
+| Learner |  99,39 | 718,27 | 190,73 | **−618,9** |
+| Oracle  |  98,94 | 717,32 | 195,69 | −618,4 |
+
+σ̂ konvergiert gegen σ (Ende: Supplier 0,142 / Customer 0,175 vs. wahr 0,15). Der **Learner erreicht das
+Oracle-Niveau und schlägt den Naiven** – Lernen lohnt sich. (Plot über `results/learning_curve.csv`.)
+
+**Ehrliche Einordnung:** Der Vorteil entsteht nur bei **punitiver** Imbalance-Strafe (hier α = 100 ct/kWh).
+Bei kleinem α (z. B. 20) ist der optimale Hedge nahe 0 – das Hedging um σ kostet dann mehr Handelsvolumen
+als es Imbalance spart, und Naiv ist am besten. Das ist konsistent mit der Realität: Imbalance-Preise sind
+gerade deshalb stark punitiv, um genaue Prognosen/Fahrpläne zu erzwingen.
 
 ---
 
@@ -184,17 +208,17 @@ Das Programm gibt **zwei Reports** aus (ohne/mit Batterie) plus einen Vergleich.
 **realisierten** (Settlement-)Werte. Geldbeträge in **EUR**, Stückpreise in **ct/kWh**, Energie in **kWh**.
 Beispiel mit Batterie (dank Seeds reproduzierbar):
 ```
-Supplier-Profit :     5,70 EUR  (Netz   3,39,  ggü. Netz  +2,30 EUR)
+Supplier-Profit :     6,82 EUR  (Netz   3,39,  ggü. Netz  +3,42 EUR)
 Customer-Kosten :    16,09 EUR  (Netz  19,88,  ggü. Netz  +3,79 EUR)
-Sozialwohlstand :   -10,39 EUR  (Netz -16,49, Optimum o. Speicher -13,22 -> 186,7%)
+Sozialwohlstand :    -9,27 EUR  (Netz -16,49, Optimum o. Speicher -13,22 -> 221,1%)
 Matching-Rate   :   95,0% des möglichen Direkthandels (min(g,d) gedeckt)
 Überlieferung   :    3,16 kWh (geliefert, nicht gebraucht/speicherbar)
 Netz-Bezug Rest :   33,97 kWh    Netz-Einspeisung Rest:   26,09 kWh
 Batterie SoC Ende: Supplier  0,00/10,0 kWh, Customer  0,33/5,0 kWh
 Win-Win (beide besser als Netz)? Supplier=ja, Customer=ja
-Erwartet->Real. : Profit   7,03->  5,70 EUR,  Kosten  14,43-> 16,09 EUR
+Erwartet->Real. : Profit   7,03->  6,82 EUR,  Kosten  14,43-> 16,09 EUR
 Prognosefehler  : Supplier   7,30 kWh, Customer   6,30 kWh
-Imbalance-Strafe: Supplier   1,14 EUR, Customer   0,71 EUR
+Imbalance-Strafe: Supplier   0,02 EUR, Customer   0,71 EUR
 ```
 - **Supplier-Profit / Customer-Kosten + EUR:** realisiertes Ergebnis und **Ersparnis gegenüber dem Netz**.
 - **Sozialwohlstand + %:** wie nah das Ergebnis am Effizienz-Optimum liegt (mit Speicher >100 % möglich).
@@ -256,6 +280,7 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | Batterie Customer | 5 kWh, 3 kW, η 0,95 | dito; eigener privater Speicher. |
 | `forecastSigma` | 0,15 | relativer Prognosefehler (Day-Ahead); 0 = perfekte Prognose. Arg `[3]`. |
 | `imbalancePrice` | 20 | α: Strafe je kWh Imbalance [ct/kWh]; 0 = aus. Arg `[4]`. |
+| Mehrtage: `days`/`σ`/`α` | 30 / 0,15 / 100 | Lern-Treiber `MehrtagesVerhandlung` (CLI: `α days σ`); α dort punitiv. |
 
 ---
 
@@ -286,13 +311,15 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | — | `capacity` / `maxPower` / `η` / SoC | Batterie: Kapazität / Lade-Entladeleistung / Wirkungsgrad / Ladestand | kWh / kWh / – / kWh |
 | forecast | `generationForecast` / `demandForecast` | Schätzung von `g_t`/`d_t` beim Verhandeln | kWh |
 | `σ` | `forecastSigma` | relativer Prognosefehler | – |
-| `α` | `imbalancePrice` | Strafe je kWh unerwarteter Netzabweichung | ct/kWh |
+| `α` | `imbalancePrice` | Strafe je kWh Kontrakt-Fehlmenge (unerwartete Unterdeckung) | ct/kWh |
+| `σ̂` | (Treiber-Zustand) | gelernte Schätzung des eigenen Prognosefehlers σ (Stufe 3) | – |
 
 ## 10. Ausführen
 ```powershell
 javac -encoding UTF-8 -d bin (Get-ChildItem src\*.java).FullName
 java -cp bin Verhandlung        # Annealing (Default, startTemperature = 250)
 java -cp bin Verhandlung 0      # rein gieriger Vergleichslauf (wie Basis)
+java -cp bin MehrtagesVerhandlung   # Stufe 3: mehrtägiges Lernen (σ̂); schreibt results/learning_curve.csv
 ```
 Hinweis: Umlaut-„Mojibake" in der Windows-Konsole ist nur eine Anzeige-Sache (Codepage); die
 Quelldateien sind UTF-8. In der Run-Konfig ggf. `-Dfile.encoding=UTF-8` setzen.

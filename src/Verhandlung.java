@@ -34,7 +34,6 @@ public class Verhandlung {
 	private static final int    DELETED_SIZE  = 30;     // Löschungen je Runde
 	private static final double MUTATION_SIGMA = 0.08;  // Mutationsstärke (Anteil der Spanne)
 	private static final double CROSSOVER_RATE = 0.5;   // Anteil Crossover vs. Mutation
-	private static final int    COOL_ROUNDS   = (int) (0.6 * MAX_ROUNDS); // Annealing-Abkühlung
 	private static final double FORECAST_SIGMA  = 0.15; // relativer Prognosefehler (Day-Ahead, 0 = perfekt)
 	private static final double IMBALANCE_PRICE = 20.0; // α: Strafe je kWh Imbalance [ct/kWh] (0 = aus)
 
@@ -54,14 +53,17 @@ public class Verhandlung {
 		Battery supplierBattery = new Battery(10.0, 3.0, 0.95, 0.0);
 		Battery customerBattery = new Battery( 5.0, 3.0, 0.95, 0.0);
 
+		// Einzeltag: Hedge = wahres σ, sofern Imbalance-Strafe aktiv (Stufe 2).
+		double hedge = (imbalancePrice > 0.0) ? forecastSigma : 0.0;
+
 		System.out.println("########## LAUF 1: OHNE Batterie (Referenz) ##########");
-		Outcome ref = runNegotiation(scen, noBattery, noBattery, negotiationSeed, startTemperature, imbalancePrice, true);
+		Outcome ref = runNegotiation(scen, noBattery, noBattery, negotiationSeed, startTemperature, imbalancePrice, hedge, hedge, MAX_ROUNDS, true);
 		System.out.println();
 		Metrics.report(scen, ref.supplier, ref.customer, ref.deal);
 
 		System.out.println();
 		System.out.println("########## LAUF 2: MIT Batterie (Supplier + Customer) ##########");
-		Outcome bat = runNegotiation(scen, supplierBattery, customerBattery, negotiationSeed, startTemperature, imbalancePrice, true);
+		Outcome bat = runNegotiation(scen, supplierBattery, customerBattery, negotiationSeed, startTemperature, imbalancePrice, hedge, hedge, MAX_ROUNDS, true);
 		System.out.println();
 		Metrics.report(scen, bat.supplier, bat.customer, bat.deal);
 
@@ -78,20 +80,20 @@ public class Verhandlung {
 	/** Ein vollständiger Verhandlungslauf. Liefert den Deal + die (privaten) Agenten zur Auswertung. */
 	static Outcome runNegotiation(ScenarioGenerator scen, Battery supplierBat, Battery customerBat,
 	                              long negotiationSeed, double startTemperature, double imbalancePrice,
-	                              boolean verbose) {
+	                              double supplierHedge, double customerHedge, int maxRounds, boolean verbose) {
 		// Frische, geseedete Zufallsquelle -> Lauf ist reproduzierbar und (bei gleichem Seed) vergleichbar.
 		Random rng = new Random(negotiationSeed);
+		int coolRounds = (int) (0.6 * maxRounds); // Annealing kühlt bis hierhin auf 0 ab
 
-		// Bei aktiver Imbalance-Strafe sichern die Agenten ihr Forecast-Profil um σ ab (konservativeres Bieten).
-		double hedgeFraction = (imbalancePrice > 0.0) ? scen.forecastSigma : 0.0;
+		// Hedge-Fraktionen gibt der Aufrufer vor (Einzeltag: wahres σ; Mehrtages-Lernen: gelerntes σ̂).
 		SupplierAgent supplier = new SupplierAgent(scen.generation, scen.generationForecast,
-			scen.feedIn, scen.retail, supplierBat, rng, imbalancePrice, hedgeFraction);
+			scen.feedIn, scen.retail, supplierBat, rng, imbalancePrice, supplierHedge);
 		CustomerAgent customer = new CustomerAgent(scen.demand, scen.demandForecast,
-			scen.retail, 0.0, customerBat, rng, imbalancePrice, hedgeFraction);
+			scen.retail, 0.0, customerBat, rng, imbalancePrice, customerHedge);
 
 		double amountMax = 1.5 * Math.max(maxOf(scen.generation), maxOf(scen.demand));
 		Mediator med = new Mediator(T, scen.feedIn, scen.retail, amountMax,
-			MUTATION_SIGMA, CROSSOVER_RATE, startTemperature, COOL_ROUNDS, rng);
+			MUTATION_SIGMA, CROSSOVER_RATE, startTemperature, coolRounds, rng);
 
 		EnergyContract[] pop = new EnergyContract[POP_SIZE];
 		for (int i = 0; i < pop.length; i++) pop[i] = med.initContract();
@@ -105,7 +107,7 @@ public class Verhandlung {
 			System.out.println("-------+-------------+-------------+--------");
 		}
 
-		for (int round = 0; round < MAX_ROUNDS; round++) {
+		for (int round = 0; round < maxRounds; round++) {
 			double temp = med.temperature(round);
 
 			// 1) Agenten löschen die für sie schlechtesten Kontrakte
@@ -133,7 +135,7 @@ public class Verhandlung {
 
 			if (verbose && round % 500 == 0) logRound(round, supplier, customer, current, temp);
 		}
-		if (verbose) logRound(MAX_ROUNDS, supplier, customer, current, 0.0);
+		if (verbose) logRound(maxRounds, supplier, customer, current, 0.0);
 
 		EnergyContract deal = (bestEver != null) ? bestEver : current;
 		if (bestEver == null && verbose) {

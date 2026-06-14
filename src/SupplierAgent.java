@@ -15,7 +15,7 @@ import java.util.Random;
  *
  * Basis-Profit je Slot (nach Batterie-Dispatch, net_t = gen − delivered):
  *   delivered·price + leftoverSurplus·feedInTariff − unmetDeficit·gridBuyPrice
- * Settlement zusätzlich: − imbalancePrice · Σ|Netz_real − Netz_forecast|  (Stufe 2).
+ * Settlement zusätzlich: − imbalancePrice · Σ|Defizit_real − Defizit_forecast|  (Stufe 2, Kontrakt-Fehlmenge).
  *
  * Konzept-Notation: delivered=x_t, price=p_t, generation=g_t, feedInTariff=f_t, gridBuyPrice=r_t.
  */
@@ -87,7 +87,9 @@ public class SupplierAgent extends Agent {
 		battery.run(netF, sF, dF);
 		double vol = 0.0;
 		for (int t = 0; t < slots; t++) {
-			vol += Math.abs((sR[t] - dR[t]) - (sF[t] - dF[t])); // Netz = Einspeisung − Bezug
+			// Kontrakt-Fehlmenge: unerwartete Liefer-Unterdeckung (Defizit-Seite, real vs. forecast).
+			// Nur die Unterdeckung zählt (Über-Zusage), nicht die Einspeisung -> Hedge nach unten senkt sie.
+			vol += Math.abs(dR[t] - dF[t]);
 		}
 		return vol;
 	}
