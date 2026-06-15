@@ -392,6 +392,166 @@ def fig_welfare_breakdown(summary: list[dict]):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Figure 6 – Ergebnis-Dashboard (einzelne Übersichtsseite)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fig_summary_dashboard(slots: dict, summary: list[dict]):
+    ref = next(r for r in summary if "ohne" in r["run"])
+    bat = next(r for r in summary if "mit"  in r["run"])
+
+    T     = len(slots["slot"])
+    hours = list(range(T))
+
+    fig = plt.figure(figsize=(16, 12))
+    fig.patch.set_facecolor("#F7F9FB")
+    fig.suptitle(
+        "Ergebnis-Dashboard: Bilaterale Strom-Verhandlung mit & ohne Batterie",
+        fontsize=15, fontweight="bold", y=0.98
+    )
+
+    gs = GridSpec(3, 4, figure=fig, hspace=0.55, wspace=0.42,
+                  left=0.07, right=0.97, top=0.93, bottom=0.07)
+
+    # ── ROW 0: KPI tiles (4 metrics) ────────────────────────────────────────
+    kpis = [
+        ("Supplier-Gewinn",   ref["supplier_profit_eur"], bat["supplier_profit_eur"], "€",  True),
+        ("Customer-Kosten",   ref["customer_cost_eur"],   bat["customer_cost_eur"],   "€",  False),
+        ("Sozialwohlstand",   ref["welfare_eur"],         bat["welfare_eur"],         "€",  True),
+        ("Netz-Abhängigkeit", ref["grid_kwh"],            bat["grid_kwh"],            "kWh", False),
+    ]
+
+    tile_bg   = "#FFFFFF"
+    ref_color = C_REF
+    bat_color = C_BAT
+
+    for col, (label, val_ref, val_bat, unit, higher_better) in enumerate(kpis):
+        ax = fig.add_subplot(gs[0, col])
+        ax.set_facecolor(tile_bg)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#DDE3EA")
+
+        delta     = val_bat - val_ref
+        pct       = (delta / abs(val_ref) * 100) if val_ref != 0 else 0
+        improved  = (delta > 0) == higher_better
+        arrow_col = "#2A9D8F" if improved else "#E76F51"
+        arrow_sym = "▲" if delta > 0 else "▼"
+
+        ax.text(0.5, 0.85, label, ha="center", va="center", transform=ax.transAxes,
+                fontsize=9, color="#555", fontweight="bold")
+
+        # ref / bat values
+        ax.text(0.25, 0.52, f"{val_ref:.2f} {unit}", ha="center", va="center",
+                transform=ax.transAxes, fontsize=11, color=ref_color, fontweight="bold")
+        ax.text(0.75, 0.52, f"{val_bat:.2f} {unit}", ha="center", va="center",
+                transform=ax.transAxes, fontsize=11, color=bat_color, fontweight="bold")
+
+        ax.text(0.25, 0.28, "ohne Bat.", ha="center", va="center",
+                transform=ax.transAxes, fontsize=7.5, color="#888")
+        ax.text(0.75, 0.28, "mit Bat.",  ha="center", va="center",
+                transform=ax.transAxes, fontsize=7.5, color="#888")
+
+        # delta badge
+        ax.text(0.5, 0.10, f"{arrow_sym} {pct:+.1f}%", ha="center", va="center",
+                transform=ax.transAxes, fontsize=10, color=arrow_col, fontweight="bold")
+
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+        ax.set_xticks([]); ax.set_yticks([])
+
+    # ── ROW 1 LEFT (span 2): Energie-Tagesprofil ─────────────────────────────
+    ax = fig.add_subplot(gs[1, :2])
+    ax.set_facecolor(tile_bg)
+    ax.fill_between(hours, slots["generation"], alpha=0.30, color=C_GEN)
+    ax.fill_between(hours, slots["demand"],     alpha=0.30, color=C_DEM)
+    ax.plot(hours, slots["generation"], color=C_GEN, linewidth=2,  label="Erzeugung g_t")
+    ax.plot(hours, slots["demand"],     color=C_DEM, linewidth=2,  label="Bedarf d_t")
+    pot = [min(g, d) for g, d in zip(slots["generation"], slots["demand"])]
+    ax.fill_between(hours, pot, alpha=0.45, color="#8338EC",
+                    label="Direkthandel min(g,d)")
+    ax.set_title("Energie-Tagesprofil (Supplier & Customer)", fontsize=10, fontweight="bold")
+    ax.set_ylabel("kWh", fontsize=9)
+    ax.set_xlabel("Tageszeit", fontsize=9)
+    ax.legend(fontsize=8, loc="upper left")
+    ax.grid(axis="y", linestyle=":", alpha=0.45)
+    xticks(ax, T)
+
+    # ── ROW 1 RIGHT (span 2): Verhandlungs-Preise & Mengen ──────────────────
+    ax = fig.add_subplot(gs[1, 2:])
+    ax.set_facecolor(tile_bg)
+    ax.fill_between(hours, slots["feedIn"], slots["retail"],
+                    alpha=0.10, color="#ADB5BD", step="mid")
+    ax.step(hours, slots["feedIn"],    where="mid", color=C_FEEIN,  lw=1.2, ls=":", label="f_t")
+    ax.step(hours, slots["retail"],    where="mid", color=C_RETAIL, lw=1.2, ls=":", label="r_t")
+    ax.step(hours, slots["ref_price"], where="mid", color=C_REF, lw=2,   label="Preis ohne Bat.")
+    ax.step(hours, slots["bat_price"], where="mid", color=C_BAT, lw=2, ls="--", label="Preis mit Bat.")
+    ax.set_title("Ausgehandelter Preis je Slot (im Preisband)", fontsize=10, fontweight="bold")
+    ax.set_ylabel("ct/kWh", fontsize=9)
+    ax.set_xlabel("Tageszeit", fontsize=9)
+    ax.legend(fontsize=8, loc="upper right", ncol=2)
+    ax.grid(axis="y", linestyle=":", alpha=0.45)
+    xticks(ax, T)
+
+    # ── ROW 2 LEFT (span 2): Wohlstand-Balken ───────────────────────────────
+    ax = fig.add_subplot(gs[2, :2])
+    ax.set_facecolor(tile_bg)
+    cats   = ["Baseline\n(nur Netz)", "Ohne\nBatterie", "Mit\nBatterie", "Optimum"]
+    wvals  = [ref["welfare_baseline_eur"], ref["welfare_eur"],
+              bat["welfare_eur"],          ref["welfare_optimal_eur"]]
+    wcols  = [C_BASE, C_REF, C_BAT, C_OPT]
+    bars   = ax.bar(cats, wvals, color=wcols, alpha=0.85, edgecolor="white", lw=1.2, width=0.5)
+    for bar, val in zip(bars, wvals):
+        offset = 0.12 if val >= 0 else -0.45
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + offset,
+                f"{val:.2f} €", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    ax.axhline(0, color="black", lw=0.8)
+    ax.set_title("Sozialwohlstand im Vergleich", fontsize=10, fontweight="bold")
+    ax.set_ylabel("EUR", fontsize=9)
+    ax.grid(axis="y", linestyle=":", alpha=0.45)
+
+    # ── ROW 2 RIGHT LEFT (1 col): Netz-Dispatch ─────────────────────────────
+    ax = fig.add_subplot(gs[2, 2])
+    ax.set_facecolor(tile_bg)
+    x      = [0, 1]
+    width  = 0.4
+    g_vals = [ref["grid_kwh"], bat["grid_kwh"]]
+    ax.bar(x, g_vals, width=width, color=[C_REF, C_BAT], alpha=0.85, edgecolor="white")
+    for xi, val in zip(x, g_vals):
+        ax.text(xi, val + 0.8, f"{val:.1f} kWh", ha="center", va="bottom",
+                fontsize=10, fontweight="bold")
+    ax.set_title("Netz-Abhängigkeit\n(gesamt)", fontsize=10, fontweight="bold")
+    ax.set_ylabel("kWh", fontsize=9)
+    ax.set_xticks(x)
+    ax.set_xticklabels(["Ohne Batterie", "Mit Batterie"], fontsize=9)
+    ax.grid(axis="y", linestyle=":", alpha=0.45)
+    reduction = (1 - bat["grid_kwh"] / ref["grid_kwh"]) * 100
+    ax.text(0.5, 0.92, f"−{reduction:.0f}% Reduktion", ha="center", va="top",
+            transform=ax.transAxes, fontsize=10, color="#2A9D8F", fontweight="bold")
+
+    # ── ROW 2 RIGHT RIGHT (1 col): Matching-Rate ────────────────────────────
+    ax = fig.add_subplot(gs[2, 3])
+    ax.set_facecolor(tile_bg)
+    m_vals = [ref["match_rate_pct"], bat["match_rate_pct"]]
+    wedge_colors = [[C_REF, "#DDE3EA"], [C_BAT, "#DDE3EA"]]
+    for i, (val, wc) in enumerate(zip(m_vals, wedge_colors)):
+        inner_ax_pos = [0.08 + i * 0.5, 0.12, 0.42, 0.78]
+        ins = ax.inset_axes(inner_ax_pos)
+        ins.pie([val, 100 - val], colors=wc, startangle=90,
+                wedgeprops=dict(width=0.35))
+        ins.text(0, 0, f"{val:.1f}%", ha="center", va="center",
+                 fontsize=10, fontweight="bold", color=wc[0])
+    ax.text(0.25, 0.06, "ohne Bat.", ha="center", va="bottom",
+            transform=ax.transAxes, fontsize=8, color=C_REF)
+    ax.text(0.75, 0.06, "mit Bat.",  ha="center", va="bottom",
+            transform=ax.transAxes, fontsize=8, color=C_BAT)
+    ax.set_title("Matching-Rate\n(Vertragserfüllung)", fontsize=10, fontweight="bold")
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_xticks([]); ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#DDE3EA")
+
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -424,6 +584,9 @@ def main():
 
     fig = fig_welfare_breakdown(summary)
     save(fig, "welfare_breakdown.png")
+
+    fig = fig_summary_dashboard(slots, summary)
+    save(fig, "summary_dashboard.png")
 
     print("\nAlle Diagramme gespeichert in:", RESULTS_DIR)
 
