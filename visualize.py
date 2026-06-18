@@ -29,9 +29,15 @@ try:
 except ImportError:
     HAS_MPL = False
 
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
-SLOTS_CSV   = os.path.join(RESULTS_DIR, "slots_data.csv")
-SUMMARY_CSV = os.path.join(RESULTS_DIR, "summary_data.csv")
+RESULTS_DIR   = os.path.join(os.path.dirname(__file__), "results")
+SLOTS_CSV     = os.path.join(RESULTS_DIR, "slots_data.csv")
+SUMMARY_CSV   = os.path.join(RESULTS_DIR, "summary_data.csv")
+LEARNING_CSV  = os.path.join(RESULTS_DIR, "learning_curve.csv")
+
+C_NAIV   = "#E76F51"   # rot    – Naiv-Strategie
+C_LEARN  = "#2A9D8F"   # teal   – Learner-Strategie
+C_ORACLE = "#264653"   # dunkelblau – Oracle-Strategie
+C_SIGMA  = "#8338EC"   # lila   – σ̂-Konvergenz
 
 # ── colour palette ────────────────────────────────────────────────────────────
 C_GEN    = "#F4A261"   # orange  – Erzeugung
@@ -48,6 +54,8 @@ C_GRID_IMP = "#E76F51" # red     – Netz-Bezug
 HOUR_LABELS = [f"{h}:00" for h in range(24)]
 TICK_HOURS  = [0, 3, 6, 9, 12, 15, 18, 21, 23]
 
+PPT_W, PPT_H = 13.3, 7.5   # 16:9 PowerPoint-Format [inch]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading
@@ -61,6 +69,17 @@ def load_slots(path: str) -> dict:
         for row in reader:
             for k, v in row.items():
                 data.setdefault(k, []).append(float(v))
+    return data
+
+
+def load_learning(path: str) -> dict:
+    """Liest learning_curve.csv -> dict column -> list[float|int]."""
+    data: dict = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            for k, v in row.items():
+                data.setdefault(k, []).append(int(v) if k == "day" else float(v))
     return data
 
 
@@ -102,7 +121,7 @@ def fig_scenario_profile(slots: dict):
     T = len(slots["slot"])
     hours = list(range(T))
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(PPT_W, PPT_H), sharex=True)
     fig.suptitle("Szenario-Tagesprofil (24 Slots)", fontsize=13, fontweight="bold")
 
     # Panel 1: Energie-Profile
@@ -157,7 +176,7 @@ def fig_contract_comparison(slots: dict):
     T = len(slots["slot"])
     hours = list(range(T))
 
-    fig, axes = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(PPT_W, PPT_H), sharex=True)
     fig.suptitle("Ausgehandelter Vertrag: ohne vs. mit Batterie", fontsize=13, fontweight="bold")
 
     # Panel 1: Mengen
@@ -204,7 +223,7 @@ def fig_grid_dispatch(slots: dict):
     T = len(slots["slot"])
     hours = list(range(T))
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(PPT_W, PPT_H), sharex=True)
     fig.suptitle("Netz-Abhängigkeit je Slot (nach Batterie-Dispatch)", fontsize=13, fontweight="bold")
 
     for ax, suffix, title in [
@@ -242,7 +261,7 @@ def fig_summary_bars(summary: list[dict]):
     ref = next(r for r in summary if "ohne" in r["run"])
     bat = next(r for r in summary if "mit"  in r["run"])
 
-    fig = plt.figure(figsize=(13, 8))
+    fig = plt.figure(figsize=(PPT_W, PPT_H))
     fig.suptitle("Ergebnisvergleich: Verhandlung ohne vs. mit Batterie", fontsize=13, fontweight="bold")
     gs = GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
 
@@ -336,7 +355,7 @@ def fig_welfare_breakdown(summary: list[dict]):
     ref = next(r for r in summary if "ohne" in r["run"])
     bat = next(r for r in summary if "mit"  in r["run"])
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(PPT_W, PPT_H))
     fig.suptitle("Wohlstand-Analyse: Mehrwert der Verhandlung & Batterie", fontsize=13, fontweight="bold")
 
     base = ref["welfare_baseline_eur"]
@@ -552,6 +571,279 @@ def fig_summary_dashboard(slots: dict, summary: list[dict]):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Adaptive Schätzung – einzelne 1×1-Diagramme
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _lc_trim(lc: dict, max_days: int) -> dict:
+    n = min(max_days, len(lc["day"]))
+    return {k: v[:n] for k, v in lc.items()}
+
+
+def fig_sigma_convergence(lc: dict, max_days: int = 15) -> plt.Figure:
+    lc = _lc_trim(lc, max_days)
+    true_sigma = 0.15
+    days = lc["day"]
+
+    fig, ax = plt.subplots(figsize=(PPT_W, PPT_H))
+
+    ax.plot(days, lc["sigmaHat_S"], color=C_SIGMA,  linewidth=4,
+            label="σ̂ Supplier", marker="o", markersize=9)
+    ax.plot(days, lc["sigmaHat_C"], color="#F4A261", linewidth=4,
+            label="σ̂ Customer", marker="s", markersize=9, linestyle="--")
+    ax.axhline(true_sigma, color="#E63946", linewidth=2.5, linestyle=":",
+               label=f"Wahres σ = {true_sigma}")
+    ax.fill_between(days, lc["sigmaHat_S"], true_sigma, alpha=0.12, color=C_SIGMA)
+    ax.text(max(days) * 0.97, true_sigma + 0.007, f"σ = {true_sigma}",
+            ha="right", va="bottom", fontsize=18, color="#E63946", fontweight="bold")
+
+    ax.set_xlabel("Tag", fontsize=20)
+    ax.set_ylabel("σ̂", fontsize=20)
+    ax.tick_params(axis="both", labelsize=17)
+    ax.set_xlim(1, max(days))
+    ax.set_ylim(0, max(true_sigma * 1.8, max(lc["sigmaHat_C"]) * 1.2))
+    ax.legend(fontsize=18, loc="lower right")
+    ax.grid(linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    return fig
+
+
+def fig_learning_imbalance(lc: dict, max_days: int = 30) -> plt.Figure:
+    lc = _lc_trim(lc, max_days)
+    days = lc["day"]
+
+    fig, ax = plt.subplots(figsize=(PPT_W, PPT_H))
+    fig.suptitle("Tägliche Imbalance-Strafe: Naiv vs. Learner vs. Referenz",
+                 fontsize=13, fontweight="bold")
+
+    ax.plot(days, lc["naiv_imbalance"], color=C_NAIV,   linewidth=2, label="Naiv",     alpha=0.85)
+    ax.plot(days, lc["lern_imbalance"], color=C_LEARN,  linewidth=2.5, label="Learner",  alpha=0.95)
+    ax.plot(days, lc["orac_imbalance"], color=C_ORACLE, linewidth=2, label="Referenz", alpha=0.85, linestyle="--")
+
+    ax.set_xlabel("Tag", fontsize=10)
+    ax.set_ylabel("EUR / Tag", fontsize=10)
+    ax.set_xlim(1, max(days))
+    ax.legend(fontsize=9)
+    ax.grid(linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    return fig
+
+
+def fig_learning_profit(lc: dict, max_days: int = 30) -> plt.Figure:
+    lc = _lc_trim(lc, max_days)
+    days = lc["day"]
+
+    fig, ax = plt.subplots(figsize=(PPT_W, PPT_H))
+    fig.suptitle("Täglicher Supplier-Profit: Naiv vs. Learner vs. Oracle",
+                 fontsize=13, fontweight="bold")
+
+    ax.plot(days, lc["naiv_profit"], color=C_NAIV,   linewidth=2, label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_profit"], color=C_LEARN,  linewidth=2.5, label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_profit"], color=C_ORACLE, linewidth=2, label="Oracle",  alpha=0.85, linestyle="--")
+    ax.axhline(0, color="black", linewidth=0.7)
+
+    ax.set_xlabel("Tag", fontsize=10)
+    ax.set_ylabel("EUR / Tag", fontsize=10)
+    ax.set_xlim(1, max(days))
+    ax.legend(fontsize=9)
+    ax.grid(linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    return fig
+
+
+def fig_learning_cumprofit(lc: dict, max_days: int = 30) -> plt.Figure:
+    lc = _lc_trim(lc, max_days)
+    days = lc["day"]
+
+    fig, ax = plt.subplots(figsize=(PPT_W, PPT_H))
+    fig.suptitle("Kumulierter Supplier-Profit (30 Tage)",
+                 fontsize=13, fontweight="bold")
+
+    ax.plot(days, lc["naiv_cumProfit"], color=C_NAIV,   linewidth=2, label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_cumProfit"], color=C_LEARN,  linewidth=2.5, label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_cumProfit"], color=C_ORACLE, linewidth=2, label="Oracle",  alpha=0.85, linestyle="--")
+
+    ax.set_xlabel("Tag", fontsize=10)
+    ax.set_ylabel("EUR (kumuliert)", fontsize=10)
+    ax.set_xlim(1, max(days))
+    ax.legend(fontsize=9)
+    ax.grid(linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    return fig
+
+
+def fig_learning_cumcost(lc: dict, max_days: int = 30) -> plt.Figure:
+    lc = _lc_trim(lc, max_days)
+    days = lc["day"]
+
+    fig, ax = plt.subplots(figsize=(PPT_W, PPT_H))
+    fig.suptitle("Kumulierte Customer-Kosten (30 Tage)",
+                 fontsize=13, fontweight="bold")
+
+    ax.plot(days, lc["naiv_cumCost"], color=C_NAIV,   linewidth=2, label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_cumCost"], color=C_LEARN,  linewidth=2.5, label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_cumCost"], color=C_ORACLE, linewidth=2, label="Oracle",  alpha=0.85, linestyle="--")
+
+    ax.set_xlabel("Tag", fontsize=10)
+    ax.set_ylabel("EUR (kumuliert)", fontsize=10)
+    ax.set_xlim(1, max(days))
+    ax.legend(fontsize=9)
+    ax.grid(linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 7 – RL-Lernkurve (MehrtagesVerhandlung) – kombinierte Übersicht
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fig_rl_learning(lc: dict, max_days: int = 12):
+    true_sigma = 0.15  # aus MehrtagesVerhandlung.TRUE_SIGMA
+    n = min(max_days, len(lc["day"]))
+    lc = {k: v[:n] for k, v in lc.items()}
+    days = lc["day"]
+
+    fig = plt.figure(figsize=(PPT_W, PPT_H))
+    fig.suptitle(
+        "Reinforcement Learning: adaptive σ̂-Schätzung",
+        fontsize=13, fontweight="bold"
+    )
+    gs = GridSpec(2, 3, figure=fig, hspace=0.52, wspace=0.38,
+                  left=0.07, right=0.97, top=0.90, bottom=0.10)
+
+    # ── Panel 1: σ̂-Konvergenz (oben links) ──────────────────────────────────
+    ax = fig.add_subplot(gs[0, 0])
+    ax.plot(days, lc["sigmaHat_S"], color=C_SIGMA,  linewidth=2,
+            label="σ̂ Supplier", marker="o", markersize=3)
+    ax.plot(days, lc["sigmaHat_C"], color="#F4A261", linewidth=2,
+            label="σ̂ Customer", marker="s", markersize=3, linestyle="--")
+    ax.axhline(true_sigma, color="#E63946", linewidth=1.5, linestyle=":",
+               label=f"Wahres σ = {true_sigma}")
+    ax.fill_between(days, lc["sigmaHat_S"], true_sigma,
+                    alpha=0.12, color=C_SIGMA)
+    ax.set_title("σ̂-Konvergenz → wahres σ", fontsize=10, fontweight="bold")
+    ax.set_ylabel("σ̂", fontsize=9)
+    ax.set_xlabel("Tag", fontsize=9)
+    ax.legend(fontsize=7.5, loc="lower right")
+    ax.set_xlim(1, max(days))
+    ax.set_ylim(0, max(true_sigma * 1.8, max(lc["sigmaHat_C"]) * 1.2))
+    ax.grid(linestyle=":", alpha=0.5)
+    ax.text(max(days) * 0.97, true_sigma + 0.004, f"σ = {true_sigma}",
+            ha="right", va="bottom", fontsize=8, color="#E63946")
+
+    # ── Panel 2: Tägliche Imbalance-Strafe (oben mitte) ──────────────────────
+    ax = fig.add_subplot(gs[0, 1])
+    ax.plot(days, lc["naiv_imbalance"],  color=C_NAIV,   linewidth=1.8,
+            label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_imbalance"],  color=C_LEARN,  linewidth=2.0,
+            label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_imbalance"],  color=C_ORACLE, linewidth=1.8,
+            label="Oracle",  alpha=0.85, linestyle="--")
+    ax.set_title("Tägliche Imbalance-Strafe", fontsize=10, fontweight="bold")
+    ax.set_ylabel("EUR / Tag", fontsize=9)
+    ax.set_xlabel("Tag", fontsize=9)
+    ax.legend(fontsize=7.5)
+    ax.set_xlim(1, max(days))
+    ax.grid(linestyle=":", alpha=0.5)
+
+    # ── Panel 3: Täglicher Supplier-Profit (oben rechts) ─────────────────────
+    ax = fig.add_subplot(gs[0, 2])
+    ax.plot(days, lc["naiv_profit"],  color=C_NAIV,   linewidth=1.8,
+            label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_profit"],  color=C_LEARN,  linewidth=2.0,
+            label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_profit"],  color=C_ORACLE, linewidth=1.8,
+            label="Oracle",  alpha=0.85, linestyle="--")
+    ax.axhline(0, color="black", linewidth=0.7)
+    ax.set_title("Täglicher Supplier-Profit", fontsize=10, fontweight="bold")
+    ax.set_ylabel("EUR / Tag", fontsize=9)
+    ax.set_xlabel("Tag", fontsize=9)
+    ax.legend(fontsize=7.5)
+    ax.set_xlim(1, max(days))
+    ax.grid(linestyle=":", alpha=0.5)
+
+    # ── Panel 4: Kumulierter Supplier-Profit (unten links) ───────────────────
+    ax = fig.add_subplot(gs[1, 0])
+    ax.plot(days, lc["naiv_cumProfit"],  color=C_NAIV,   linewidth=2,
+            label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_cumProfit"],  color=C_LEARN,  linewidth=2.5,
+            label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_cumProfit"],  color=C_ORACLE, linewidth=2,
+            label="Oracle",  alpha=0.85, linestyle="--")
+    ax.set_title("Kumulierter Supplier-Profit", fontsize=10, fontweight="bold")
+    ax.set_ylabel("EUR (kumuliert)", fontsize=9)
+    ax.set_xlabel("Tag", fontsize=9)
+    ax.legend(fontsize=7.5)
+    ax.set_xlim(1, max(days))
+    ax.grid(linestyle=":", alpha=0.5)
+
+    # ── Panel 5: Kumulierte Customer-Kosten (unten mitte) ────────────────────
+    ax = fig.add_subplot(gs[1, 1])
+    ax.plot(days, lc["naiv_cumCost"],  color=C_NAIV,   linewidth=2,
+            label="Naiv",    alpha=0.85)
+    ax.plot(days, lc["lern_cumCost"],  color=C_LEARN,  linewidth=2.5,
+            label="Learner", alpha=0.95)
+    ax.plot(days, lc["orac_cumCost"],  color=C_ORACLE, linewidth=2,
+            label="Oracle",  alpha=0.85, linestyle="--")
+    ax.set_title("Kumulierte Customer-Kosten", fontsize=10, fontweight="bold")
+    ax.set_ylabel("EUR (kumuliert)", fontsize=9)
+    ax.set_xlabel("Tag", fontsize=9)
+    ax.legend(fontsize=7.5)
+    ax.set_xlim(1, max(days))
+    ax.grid(linestyle=":", alpha=0.5)
+
+    # ── Panel 6: Ergebnis-Kachel (unten rechts) ──────────────────────────────
+    ax = fig.add_subplot(gs[1, 2])
+    ax.axis("off")
+    last_day = days[-1]
+    n_cp = lc["naiv_cumProfit"][-1];  l_cp = lc["lern_cumProfit"][-1];  o_cp = lc["orac_cumProfit"][-1]
+    n_cc = lc["naiv_cumCost"][-1];    l_cc = lc["lern_cumCost"][-1];    o_cc = lc["orac_cumCost"][-1]
+    n_imb = sum(lc["naiv_imbalance"]); l_imb = sum(lc["lern_imbalance"]); o_imb = sum(lc["orac_imbalance"])
+    table_data = [
+        ["",           "Naiv",          "Learner",       "Oracle"],
+        ["S.-Profit",  f"{n_cp:.0f} €", f"{l_cp:.0f} €", f"{o_cp:.0f} €"],
+        ["C.-Kosten",  f"{n_cc:.0f} €", f"{l_cc:.0f} €", f"{o_cc:.0f} €"],
+        ["Imbalance",  f"{n_imb:.0f} €",f"{l_imb:.0f} €",f"{o_imb:.0f} €"],
+    ]
+    tbl = ax.table(cellText=table_data[1:], colLabels=table_data[0],
+                   loc="center", cellLoc="center")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1.1, 1.6)
+    for (r, c), cell in tbl.get_celld().items():
+        if r == 0:
+            cell.set_facecolor("#264653"); cell.set_text_props(color="white", fontweight="bold")
+        elif c == 2:
+            cell.set_facecolor("#d4f1ec")
+        cell.set_edgecolor("#cccccc")
+    ax.set_title(f"Kumuliert ({last_day} Tage)", fontsize=10, fontweight="bold")
+
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Figure 8 – Kombinierte Übersicht aller Diagramme
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fig_combined_overview(saved_files: list[tuple[str, str]]):
+    n     = len(saved_files)
+    cols  = 3
+    rows  = math.ceil(n / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(PPT_W * 1.5, PPT_H * rows / 2.0))
+    fig.suptitle("Übersicht: Bilaterale Strom-Verhandlung – alle Diagramme",
+                 fontsize=14, fontweight="bold", y=1.01)
+    axes_flat = axes.flatten() if rows > 1 else list(axes)
+    for i, (path, title) in enumerate(saved_files):
+        img = plt.imread(path)
+        axes_flat[i].imshow(img)
+        axes_flat[i].set_title(title, fontsize=8, fontweight="bold", pad=4)
+        axes_flat[i].axis("off")
+    for i in range(n, len(axes_flat)):
+        axes_flat[i].axis("off")
+    plt.tight_layout()
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -570,23 +862,34 @@ def main():
 
     print("Erzeuge Diagramme …")
 
-    fig = fig_scenario_profile(slots)
-    save(fig, "scenario_profile.png")
+    individual = [
+        ("scenario_profile.png",    "Szenario-Tagesprofil",          fig_scenario_profile(slots)),
+        ("contract_comparison.png", "Ausgehandelter Vertrag",         fig_contract_comparison(slots)),
+        ("grid_dispatch.png",       "Netz-Abhängigkeit je Slot",      fig_grid_dispatch(slots)),
+        ("summary_bars.png",        "Ergebnisvergleich",              fig_summary_bars(summary)),
+        ("welfare_breakdown.png",   "Wohlstand-Analyse",              fig_welfare_breakdown(summary)),
+        ("summary_dashboard.png",   "Ergebnis-Dashboard",             fig_summary_dashboard(slots, summary)),
+    ]
 
-    fig = fig_contract_comparison(slots)
-    save(fig, "contract_comparison.png")
+    if os.path.exists(LEARNING_CSV):
+        lc = load_learning(LEARNING_CSV)
+        individual.append(("rl_learning_curve.png",    "RL Lernkurve (Übersicht)",      fig_rl_learning(lc)))
+        individual.append(("sigma_convergence.png",    "σ̂-Konvergenz",                  fig_sigma_convergence(lc)))
+        individual.append(("learning_imbalance.png",   "Imbalance-Strafe",               fig_learning_imbalance(lc)))
+        individual.append(("learning_profit.png",      "Täglicher Supplier-Profit",      fig_learning_profit(lc)))
+        individual.append(("learning_cumprofit.png",   "Kumulierter Supplier-Profit",    fig_learning_cumprofit(lc)))
+        individual.append(("learning_cumcost.png",     "Kumulierte Customer-Kosten",     fig_learning_cumcost(lc)))
+    else:
+        print(f"  [Übersprungen] {LEARNING_CSV} nicht gefunden.")
+        print("  Bitte zuerst ausführen: java -cp bin MehrtagesVerhandlung")
 
-    fig = fig_grid_dispatch(slots)
-    save(fig, "grid_dispatch.png")
+    saved = []
+    for filename, title, fig in individual:
+        save(fig, filename)
+        saved.append((os.path.join(RESULTS_DIR, filename), title))
 
-    fig = fig_summary_bars(summary)
-    save(fig, "summary_bars.png")
-
-    fig = fig_welfare_breakdown(summary)
-    save(fig, "welfare_breakdown.png")
-
-    fig = fig_summary_dashboard(slots, summary)
-    save(fig, "summary_dashboard.png")
+    fig = fig_combined_overview(saved)
+    save(fig, "overview_all.png")
 
     print("\nAlle Diagramme gespeichert in:", RESULTS_DIR)
 

@@ -80,3 +80,34 @@ Wohlstand-Wasserfall: zeigt schrittweise, wie viel Mehrwert die Verhandlung und 
 - **Δ Verhandlungsgewinn:** Differenz Baseline → Ohne Batterie.
 - **Δ Batterie-Mehrwert:** Differenz Ohne Batterie → Mit Batterie.
 - Das theoretische Optimum (kein Speicher, direkter Match) dient als obere Schranke.
+
+---
+
+## Diagramme – Adaptive Schätzung (MehrtagesVerhandlung)
+
+Alle folgenden Diagramme basieren auf `learning_curve.csv` (erzeugt durch `java -cp bin MehrtagesVerhandlung`).
+Drei Strategien werden auf derselben 30-Tage-Folge verglichen: **Naiv** (σ̂ ≡ 0), **Learner** (σ̂ adaptiv), **Referenz** (σ̂ ≡ wahres σ = 0,15).
+
+### `rl_learning_curve.png`
+Kombinierte 2×3-Übersicht aller Lernkurven-Panels (erste 12 Tage). Geeignet als Gesamtüberblick.
+
+### `sigma_convergence.png`
+**Hauptdiagramm der adaptiven Schätzung** – erste 15 Tage.
+- Zeigt wie σ̂ für Supplier und Customer von 0 startet und gegen das wahre σ = 0,15 konvergiert.
+- Supplier konvergiert nahe an 0,15; Customer-Schätzung liegt etwas höher (~0,17) bedingt durch die Grundlast (0,8 kWh nachts), die kleine relative Fehler vergrößert.
+
+### `learning_imbalance.png`
+Tägliche Imbalance-Strafe je Strategie über 30 Tage.
+- Learner fällt schnell auf Referenz-Niveau; Naiv bleibt dauerhaft höher.
+- Zeigt den konkreten wirtschaftlichen Nutzen des Lernens.
+
+### `learning_profit.png`
+Täglicher Supplier-Profit je Strategie über 30 Tage.
+
+### `learning_cumprofit.png`
+Kumulierter Supplier-Profit über 30 Tage.
+- Naiv: 111,98 € | Learner: 99,39 € | Referenz: 98,94 €
+
+### `learning_cumcost.png`
+Kumulierte Customer-Kosten über 30 Tage.
+- Naiv: 738,69 € | Learner: 718,27 € | Referenz: 717,32 €
