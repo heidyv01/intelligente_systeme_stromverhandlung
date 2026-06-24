@@ -10,6 +10,7 @@ Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 2. [Annahmen](#2-annahmen)
 3. [Bestandteile der Verhandlung](#3-bestandteile-der-verhandlung)
 4. [Methoden](#4-methoden)
+   4.10. [Stufen des Projekts](#410-stufen-des-projekts)
 5. [Ablauf einer Verhandlung](#5-ablauf-einer-verhandlung)
 6. [Ergebnisse lesen und einordnen](#6-ergebnisse-lesen-und-einordnen)
 7. [Parameter](#7-parameter)
@@ -60,9 +61,10 @@ Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 | **Agent (abstrakt)** | [Agent.java](src/Agent.java) | Schnittstelle: `utility`, `vote`, `delete`. |
 | **Supplier** | [SupplierAgent.java](src/SupplierAgent.java) | Private Profit-Zielfunktion. |
 | **Customer** | [CustomerAgent.java](src/CustomerAgent.java) | Private Kosten-Zielfunktion. |
-| **Batterie** | [Battery.java](src/Battery.java) | Privater Speicher je Agent: greedy Lade-/Entlade-Dispatch (koppelt Slots). |
+| **Batterie** | [Battery.java](src/Battery.java) | Privater Speicher je Agent: greedy Lade-/Entlade-Dispatch mit konfigurierbarer Kapazität, Leistung und round-trip-Effizienz (koppelt Slots). |
 | **Mediator** | [Mediator.java](src/Mediator.java) | **Uninformiert.** Erzeugt Vorschläge (GA-Operatoren) + gibt Annealing-Temperatur vor. |
-| **Verhandlung** | [Verhandlung.java](src/Verhandlung.java) | Hauptschleife: löschen → reproduzieren → abstimmen → archivieren. |
+| **Verhandlung (Stufe 2)** | [Verhandlung.java](src/Verhandlung.java) | Einzeltag-Verhandlung: Hauptschleife löschen → reproduzieren → abstimmen → archivieren. Vergleicht Szenarien ohne/mit Batterie. |
+| **Mehrtagesverhandlung (Stufe 3)** | [MehrtagesVerhandlung.java](src/MehrtagesVerhandlung.java) | Mehrtägige Verhandlung (30 Tage) mit Lerneffekt: Agenten schätzen adaptiv ihre Prognosefehler σ̂. Vergleicht drei Strategien: Naiv, Learner, Oracle. |
 | **Auswertung** | [Metrics.java](src/Metrics.java) | Kennzahlen & Baseline-/Optimum-Vergleich (nur zur Auswertung, nicht Teil der Verhandlung). |
 
 Die **drei Hebel**, an denen man die Verhandlung verändert:
@@ -177,6 +179,54 @@ Oracle-Niveau und schlägt den Naiven** – Lernen lohnt sich. (Plot über `resu
 Bei kleinem α (z. B. 20) ist der optimale Hedge nahe 0 – das Hedging um σ kostet dann mehr Handelsvolumen
 als es Imbalance spart, und Naiv ist am besten. Das ist konsistent mit der Realität: Imbalance-Preise sind
 gerade deshalb stark punitiv, um genaue Prognosen/Fahrpläne zu erzwingen.
+
+### 4.10 Stufen des Projekts
+
+Das Projekt ist modular in **drei Ausbaustufen** strukturiert:
+
+#### Stufe 1: Basismodell (Referenz)
+- **Ziel:** Zeige, dass bilaterale Verhandlung beiden Agenten nutzt.
+- **Modul:** [Verhandlung.java](src/Verhandlung.java) mit `startTemperature=0` oder CLI `java Verhandlung 0`.
+- **Annahmen:** Slots sind unabhängig, keine Prognose-Unsicherheit (`forecastSigma=0`, `imbalancePrice=0`).
+- **Ergebnis:** Tendenziell Win-Win; beide schlagen ihren Netz-Fallback. Keine Batterie, kein Zeitkopplungen.
+- **Referenz:** Klein et al. (2003), Annealing Mediator mit GA.
+
+#### Stufe 2: Mit Batterie + Prognose-Unsicherheit (Realismus)
+- **Ziel:** Batterie-Mehrwert und Hedging-Effekt messbar machen.
+- **Modul:** [Verhandlung.java](src/Verhandlung.java) Standard-Aufruf, `startTemperature > 0`, Batterie aktiv.
+- **Annahmen:**
+  - Prognose-Unsicherheit: `forecastSigma=0,15` (Agenten verhandeln auf Forecasts, Settlement auf Real).
+  - Imbalance-Strafe: `imbalancePrice=20` ct/kWh (Strafen-Anreiz, konservativ zu bieten).
+  - Batterie: Supplier 10 kWh/3 kW, Customer 5 kWh/3 kW, je η=0,95.
+- **Mechanik:**
+  - Batterie-Dispatch: greedy Lade-/Entlade-Arbitrage (mittags speichern → abends nutzen).
+  - Settlement: Agenten erkennen ihre (ggü. Forecast unterschiedliche) realen Profile und zahlen Imbalance-Strafeu.
+- **Ergebnis:** Speicher reduziert Netz-Abhängigkeit um ~30 %, beide Seiten profitieren.
+
+#### Stufe 3: Mehrtägiges Lernen (adaptive σ-Schätzung)
+- **Ziel:** Wie lernen Agenten ihre Prognosefehler über mehrere Tage?
+- **Modul:** [MehrtagesVerhandlung.java](src/MehrtagesVerhandlung.java).
+- **Szenario:** 30 aufeinanderfolgende Tage (gleiche Seed-Sequenz, tägliche Szenarien unterschiedlich).
+- **Mechanik:**
+  - Day-Ahead verhandeln beide auf ihrem Forecast mit Hedge σ̂ (gelernte Schätzung des Prognosefehlers).
+  - Nach Settlement (mit echten Profilen + Imbalance `α=100` ct/kWh, höher als Stufe 2) beobachten beide ihre
+    **relativen Prognosefehler** und updaten σ̂ (laufende Streuung der Abweichungen).
+  - σ̂ startet bei 0 (naiv), konvergiert asymptotisch gegen das wahre σ.
+- **Vergleich (auf derselben Tagesfolge):**
+  - **Naiv** (`σ̂ ≡ 0`): hedged nicht → viele Imbalance-Strafen.
+  - **Learner** (`σ̂` adaptiv): lernt aus Feedback → nähert sich dem Oracle an.
+  - **Oracle** (`σ̂ ≡ σ` ab Tag 1): kennt σ exakt (obere Schranke).
+- **Ergebnis:** Learner erreicht Oracle-Niveau und schlägt Naiv (bei hohem α), proof-of-concept für Lernfähigkeit.
+- **Output:** `results/learning_curve.csv` + Python-Plot über 30-Tage-Verlauf von Wohlstand & σ̂.
+
+| Aspekt | Stufe 1 | Stufe 2 | Stufe 3 |
+|---|---|---|---|
+| Batterie | nein | ja | nein (isoliert Lern-Effekt) |
+| Prognose-Fehler | nein | ja | ja (Day-Ahead) |
+| Imbalance-Strafe α | 0 | 20 ct/kWh | 100 ct/kWh |
+| Zeithorizont | 1 Tag | 1 Tag | 30 Tage |
+| Fokus | Mediation + GA | Speicher-Mehrwert | adaptives Lernen |
+| Vergleich | Baseline (T=0) | Ohne vs. mit Batterie | Naiv vs. Learner vs. Oracle |
 
 ---
 
@@ -315,11 +365,78 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `σ̂` | (Treiber-Zustand) | gelernte Schätzung des eigenen Prognosefehlers σ (Stufe 3) | – |
 
 ## 10. Ausführen
-```powershell
-javac -encoding UTF-8 -d bin (Get-ChildItem src\*.java).FullName
-java -cp bin Verhandlung        # Annealing (Default, startTemperature = 250)
-java -cp bin Verhandlung 0      # rein gieriger Vergleichslauf (wie Basis)
-java -cp bin MehrtagesVerhandlung   # Stufe 3: mehrtägiges Lernen (σ̂); schreibt results/learning_curve.csv
+
+### 10.1 Kompilierung
+```bash
+# Alle Java-Dateien kompilieren (mit UTF-8-Encoding für Umlaute)
+javac -encoding UTF-8 -d bin src/*.java
 ```
-Hinweis: Umlaut-„Mojibake" in der Windows-Konsole ist nur eine Anzeige-Sache (Codepage); die
-Quelldateien sind UTF-8. In der Run-Konfig ggf. `-Dfile.encoding=UTF-8` setzen.
+
+### 10.2 Hauptmodule
+
+#### Verhandlung.java (Stufe 1–2)
+Einzeltag-Verhandlung mit optionaler Batterie und Prognose-Unsicherheit.
+
+**Standard-Lauf (Stufe 2 mit Batterie):**
+```bash
+java -cp bin Verhandlung
+```
+Erzeugt:
+- Zwei Console-Reports (ohne/mit Batterie) + Vergleich
+- `results/slots_data.csv` (Slot-Details)
+- `results/summary_data.csv` (aggregierte Kennzahlen)
+
+**Lauf mit angepasstem Annealing-Start (`startTemperature`):**
+```bash
+java -cp bin Verhandlung 0      # Stufe 1 (rein gierig, T=0, wie Basis-Vergleich)
+java -cp bin Verhandlung 500    # höheres Annealing-Potenzial
+```
+
+**Alle Parameter per Kommandozeile überschreiben:**
+```bash
+java -cp bin Verhandlung <startTemperature> <negotiationSeed> <scenarioSeed> <forecastSigma> <imbalancePrice>
+# Beispiel:
+java -cp bin Verhandlung 250 1 42 0.15 20
+```
+
+#### MehrtagesVerhandlung.java (Stufe 3)
+Mehrtägige Verhandlung (30 Tage) mit adaptivem Lernen der Prognosefehler-Schätzung σ̂.
+
+**Standard-Lauf:**
+```bash
+java -cp bin MehrtagesVerhandlung
+```
+Laufs 3 Strategien (Naiv, Learner, Oracle) auf 30 Tagen mit `α=100`, `σ=0,15`:
+- Console: Tägliche Ergebnisse und Lernverlauf
+- `results/learning_curve.csv` (30 Zeilen: Tag, σ̂-Schätzungen, kumulative Wohlstände)
+
+**Mit angepassten Parametern:**
+```bash
+java -cp bin MehrtagesVerhandlung <imbalancePrice> <days> <trueSigma>
+# Beispiel: Learner mit kleinerem Imbalance-Preis:
+java -cp bin MehrtagesVerhandlung 50 30 0.15
+```
+
+### 10.3 Visualisierung
+Nach einem Verhandlungslauf (Stufe 1–2) oder Mehrtage-Lauf (Stufe 3):
+
+```bash
+python3 visualize.py
+```
+
+Erzeugt (in `results/`):
+- `scenario_profile.png` – Tagesprofil (Erzeugung, Bedarf, Preisband)
+- `contract_comparison.png` – Vertrag pro Slot (Mengen, Preise)
+- `grid_dispatch.png` – Netz-Interaktion (Einspeisung, Bezug)
+- `summary_bars.png` – Ergebnis-Balken (Gewinn, Kosten, Wohlstand)
+- `welfare_breakdown.png` – Wohlstand im Vergleich (Baseline/Verhandelt/Optimum)
+- `learning_curve.png` – (nur bei MehrtagesVerhandlung) 30-Tage-Verlauf von σ̂ und Wohlstand
+
+### 10.4 Hinweise
+
+- **Encoding:** Umlaut-„Mojibake" in der Windows-Konsole ist nur eine Anzeige-Sache (Codepage);
+  die Quelldateien sind UTF-8. In IDE-Run-Konfigurationen ggf. `-Dfile.encoding=UTF-8` setzen.
+- **Reproduzierbarkeit:** Mit gleichem `scenarioSeed` und `negotiationSeed` sind die Ergebnisse exakt
+  reproduzierbar (= Nützlich für Vergleiche).
+- **Performance:** Einzeltag (~10 000 Runden) dauert ~2 s; MehrtagesVerhandlung (30 × 4 000 Runden) ~30 s.
+
