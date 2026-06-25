@@ -33,6 +33,8 @@ RESULTS_DIR   = os.path.join(os.path.dirname(__file__), "results")
 SLOTS_CSV     = os.path.join(RESULTS_DIR, "slots_data.csv")
 SUMMARY_CSV   = os.path.join(RESULTS_DIR, "summary_data.csv")
 LEARNING_CSV  = os.path.join(RESULTS_DIR, "learning_curve.csv")
+CAP_CSV       = os.path.join(RESULTS_DIR, "capacity_sweep.csv")
+TEMP_CSV      = os.path.join(RESULTS_DIR, "temperature_sweep.csv")
 
 C_NAIV   = "#E76F51"   # rot    – Naiv-Strategie
 C_LEARN  = "#2A9D8F"   # teal   – Learner-Strategie
@@ -847,6 +849,60 @@ def fig_combined_overview(saved_files: list[tuple[str, str]]):
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Sweeps: Batteriekapazität & Annealing-Temperatur
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fig_capacity_sweep(d: dict):
+    cap = d["capacity_kWh"]
+    w, we = d["welfare_mean_eur"], d["welfare_std_eur"]
+    g, ge = d["grid_mean_kwh"],    d["grid_std_kwh"]
+
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    fig.suptitle("Batterie: Wirkung der Speicherkapazität", fontsize=13, fontweight="bold")
+
+    ax1.errorbar(cap, w, yerr=we, color=C_BAT, marker="o", linewidth=2, capsize=4,
+                 label="Sozialwohlstand [€]")
+    ax1.set_xlabel("Batteriekapazität Supplier [kWh]  (Customer = Hälfte)", fontsize=10)
+    ax1.set_ylabel("Sozialwohlstand [EUR]", fontsize=10, color=C_BAT)
+    ax1.tick_params(axis="y", labelcolor=C_BAT)
+    ax1.grid(axis="y", linestyle=":", alpha=0.5)
+
+    ax2 = ax1.twinx()
+    ax2.errorbar(cap, g, yerr=ge, color=C_RETAIL, marker="s", linewidth=2, capsize=4,
+                 linestyle="--", label="Netz-Abhängigkeit [kWh]")
+    ax2.set_ylabel("Netz-Abhängigkeit [kWh]", fontsize=10, color=C_RETAIL)
+    ax2.tick_params(axis="y", labelcolor=C_RETAIL)
+
+    l1, lb1 = ax1.get_legend_handles_labels()
+    l2, lb2 = ax2.get_legend_handles_labels()
+    ax1.legend(l1 + l2, lb1 + lb2, fontsize=9, loc="center right")
+    ax1.set_title("Mehr Kapazität → höherer Wohlstand & weniger Netz (abnehmender Grenznutzen)",
+                  fontsize=9, color="#555")
+    plt.tight_layout()
+    return fig
+
+
+def fig_temperature_sweep(d: dict):
+    t = d["startTemperature"]
+    w, we = d["welfare_mean_eur"], d["welfare_std_eur"]
+    m = sum(w) / len(w)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fig.suptitle("Annealing-Temperatur: kaum Wirkung auf das Ergebnis", fontsize=13, fontweight="bold")
+    ax.errorbar(t, w, yerr=we, color=C_REF, marker="o", linewidth=2, capsize=4,
+                label="Sozialwohlstand [€] (Mittel ± Std)")
+    ax.axhline(m, color="#999", linestyle="--", linewidth=1, label=f"Gesamt-Mittel ≈ {m:.2f} €")
+    ax.set_xlabel("Start-Temperatur T₀  (0 = rein gierig)", fontsize=10)
+    ax.set_ylabel("Sozialwohlstand [EUR]", fontsize=10)
+    ax.grid(axis="y", linestyle=":", alpha=0.5)
+    ax.legend(fontsize=9, loc="best")
+    ax.set_title("Unterschiede innerhalb der Streuung → bei 2 Agenten trägt die GA-Vielfalt die Suche",
+                 fontsize=9, color="#555")
+    plt.tight_layout()
+    return fig
+
+
 def main():
     if not HAS_MPL:
         print("matplotlib ist nicht installiert. Bitte installieren: pip install matplotlib")
@@ -882,6 +938,13 @@ def main():
     else:
         print(f"  [Übersprungen] {LEARNING_CSV} nicht gefunden.")
         print("  Bitte zuerst ausführen: java -cp bin MehrtagesVerhandlung")
+
+    if os.path.exists(CAP_CSV):
+        individual.append(("capacity_sweep.png", "Batteriekapazitäts-Sweep",
+                           fig_capacity_sweep(load_slots(CAP_CSV))))
+    if os.path.exists(TEMP_CSV):
+        individual.append(("temperature_sweep.png", "Annealing-Temperatur-Sweep",
+                           fig_temperature_sweep(load_slots(TEMP_CSV))))
 
     saved = []
     for filename, title, fig in individual:
