@@ -1,26 +1,80 @@
 # Projektdokumentation – Bilaterale Strom-Verhandlung über einen Mediator
 
-Technische Dokumentation des Projekts: Modell, Aufbau, Methoden, Parameter und Auswertung.
-Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
+Technische Dokumentation des Projekts: Modell, Aufbau, Methoden, Parameter und Auswertung. Quellcode in [src/](src/).
 
 ---
 
 ## Inhalt
-1. [Grundidee](#1-grundidee)
-2. [Annahmen](#2-annahmen)
-3. [Bestandteile der Verhandlung](#3-bestandteile-der-verhandlung)
-4. [Methoden](#4-methoden)
-   4.10. [Stufen des Projekts](#410-stufen-des-projekts)
-5. [Ablauf einer Verhandlung](#5-ablauf-einer-verhandlung)
-6. [Ergebnisse lesen und einordnen](#6-ergebnisse-lesen-und-einordnen)
-7. [Parameter](#7-parameter)
-8. [Modellgrenzen / Vereinfachungen](#8-modellgrenzen--vereinfachungen)
-9. [Glossar](#9-glossar)
-10. [Ausführen](#10-ausführen)
+1. [Ausführen](#1-ausführen)
+2. [Grundidee](#2-grundidee)
+3. [Annahmen](#3-annahmen)
+4. [Bestandteile der Verhandlung](#4-bestandteile-der-verhandlung)
+5. [Methoden](#5-methoden)
+6. [Ablauf einer Verhandlung](#6-ablauf-einer-verhandlung)
+7. [Ergebnisse lesen und einordnen](#7-ergebnisse-lesen-und-einordnen)
+8. [Parameter](#8-parameter)
+9. [Modellgrenzen / Vereinfachungen](#9-modellgrenzen--vereinfachungen)
+10. [Glossar](#10-glossar)
 
 ---
 
-## 1. Grundidee
+## 1. Ausführen
+
+Voraussetzung: JDK (getestet mit Java 21) und – für die Plots – Python 3 mit `matplotlib`.
+
+### 1.1 Kompilierung
+```powershell
+# Alle Java-Dateien kompilieren (UTF-8-Encoding für Umlaute)
+javac -encoding UTF-8 -d bin (Get-ChildItem src\*.java).FullName
+# (bash:  javac -encoding UTF-8 -d bin src/*.java)
+```
+
+### 1.2 Hauptmodule
+
+**`Verhandlung` (Einzeltag, Stufe 1–2)** – Verhandlung mit optionaler Batterie und Prognose-Unsicherheit.
+Gibt zwei Reports aus (ohne/mit Batterie) + Vergleich und schreibt `results/slots_data.csv` und
+`results/summary_data.csv`.
+```powershell
+java -cp bin Verhandlung
+# Alle Parameter per CLI:
+java -cp bin Verhandlung <startTemperature> <negotiationSeed> <scenarioSeed> <forecastSigma> <imbalancePrice>
+java -cp bin Verhandlung 0 1 42 0 0    # reines Basismodell (Stufe 1): T=0, keine Prognose-Unsicherheit
+java -cp bin Verhandlung 0             # nur Annealing aus (T=0), Batterie/Forecast bleiben an
+```
+Hinweis: `Verhandlung` fährt **immer** beide Läufe (ohne/mit Batterie). „Stufe 1" entspricht dem
+**„ohne Batterie"**-Lauf mit `forecastSigma=0` und `imbalancePrice=0`.
+
+**`MehrtagesVerhandlung` (Stufe 3)** – 30 Tage mit adaptivem Lernen der Prognosefehler-Schätzung σ̂;
+vergleicht Naiv / Learner / Oracle und schreibt `results/learning_curve.csv`.
+```powershell
+java -cp bin MehrtagesVerhandlung
+java -cp bin MehrtagesVerhandlung <imbalancePrice> <days> <trueSigma>   # z. B. 100 30 0.15
+```
+
+**`Sweep` (Statistik & Parameter-Studien)** – Mittelwert ± Streuung über mehrere Seeds sowie
+Kapazitäts- und Annealing-Temperatur-Sweep; schreibt `results/capacity_sweep.csv` und
+`results/temperature_sweep.csv`.
+```powershell
+java -cp bin Sweep
+java -cp bin Sweep <nSeeds> <roundsProLauf>   # z. B. 12 5000
+```
+
+### 1.3 Visualisierung
+Nach den Läufen die CSVs plotten:
+```powershell
+py visualize.py        # bzw. python3 visualize.py
+```
+Erzeugt folgende Visualisierungen:
+- aus `Verhandlung`: `scenario_profile`, `contract_comparison`, `grid_dispatch`, `summary_bars`,
+  `welfare_breakdown`, `summary_dashboard`
+- aus `MehrtagesVerhandlung`: `rl_learning_curve`, `sigma_convergence`, `learning_imbalance`,
+  `learning_profit`, `learning_cumprofit`, `learning_cumcost`
+- aus `Sweep`: `capacity_sweep`, `temperature_sweep`
+- `overview_all` (Gesamtübersicht)
+
+---
+
+## 2. Grundidee
 
 - **Use Case:** Peer-to-Peer-Stromhandel. Ein **Supplier** (PV-Überschuss) und ein **Customer**
   (Tagesbedarf) handeln für **einen Tag mit 24 Slots** je Slot eine **Liefermenge** und einen **Preis** aus.
@@ -33,7 +87,7 @@ Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 - **Bilateral** (genau 2 Parteien) und **Ziele bleiben privat** – der Mediator kennt sie nicht.
 - **Aufbauend auf der Basis** (Klein-Verhandlung): Mechanik beibehalten, Domäne auf Strom umgebaut.
 
-## 2. Annahmen
+## 3. Annahmen
 
 - **Zeit:** 1 Tag = 24 Slots (stündlich). Ohne Batterie sind die Slots **unabhängig**; mit Batterie **koppelt** der Speicher sie (Überschuss eines Slots deckt ein späteres Defizit).
 - **Kontrakt:** je Slot Menge `x_t` [kWh] **und** Preis `p_t` [ct/kWh] → 48 verhandelte Werte.
@@ -52,7 +106,7 @@ Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 - **Daten synthetisch & generiert** (PV-Glocke, Last-Doppelpeak); **reproduzierbar** über zwei Seeds (Szenario + Verhandlung).
 - **Kosten der Erzeugung** beim Supplier = 0 (PV); modelliert wird nur der Handel, nicht der Anlagenbetrieb.
 
-## 3. Bestandteile der Verhandlung
+## 4. Bestandteile der Verhandlung
 
 | Komponente | Datei | Rolle |
 |---|---|---|
@@ -63,8 +117,9 @@ Quellcode in [src/](src/), Hintergrund und Ideen in [README.md](README.md).
 | **Customer** | [CustomerAgent.java](src/CustomerAgent.java) | Private Kosten-Zielfunktion. |
 | **Batterie** | [Battery.java](src/Battery.java) | Privater Speicher je Agent: greedy Lade-/Entlade-Dispatch mit konfigurierbarer Kapazität, Leistung und round-trip-Effizienz (koppelt Slots). |
 | **Mediator** | [Mediator.java](src/Mediator.java) | **Uninformiert.** Erzeugt Vorschläge (GA-Operatoren) + gibt Annealing-Temperatur vor. |
-| **Verhandlung (Stufe 2)** | [Verhandlung.java](src/Verhandlung.java) | Einzeltag-Verhandlung: Hauptschleife löschen → reproduzieren → abstimmen → archivieren. Vergleicht Szenarien ohne/mit Batterie. |
-| **Mehrtagesverhandlung (Stufe 3)** | [MehrtagesVerhandlung.java](src/MehrtagesVerhandlung.java) | Mehrtägige Verhandlung (30 Tage) mit Lerneffekt: Agenten schätzen adaptiv ihre Prognosefehler σ̂. Vergleicht drei Strategien: Naiv, Learner, Oracle. |
+| **Verhandlung (Stufe 1–2)** | [Verhandlung.java](src/Verhandlung.java) | Einzeltag-Verhandlung: Hauptschleife löschen → reproduzieren → abstimmen → archivieren. Vergleicht ohne/mit Batterie. |
+| **Mehrtagesverhandlung (Stufe 3)** | [MehrtagesVerhandlung.java](src/MehrtagesVerhandlung.java) | Mehrtägige Verhandlung (30 Tage) mit Lerneffekt: Agenten schätzen adaptiv ihre Prognosefehler σ̂. Vergleicht Naiv / Learner / Oracle. |
+| **Sweep / Statistik** | [Sweep.java](src/Sweep.java) | Multi-Seed-Statistik (Mittel ± Streuung) + Kapazitäts-/Temperatur-Sweep; CSV-Export für die Plots. |
 | **Auswertung** | [Metrics.java](src/Metrics.java) | Kennzahlen & Baseline-/Optimum-Vergleich (nur zur Auswertung, nicht Teil der Verhandlung). |
 
 Die **drei Hebel**, an denen man die Verhandlung verändert:
@@ -74,21 +129,21 @@ Die **drei Hebel**, an denen man die Verhandlung verändert:
 
 ---
 
-## 4. Methoden
+## 5. Methoden
 
 Das Verfahren kombiniert vier Bausteine:
 
-### 4.1 Mediierte Verhandlung („Annealing Mediator", Klein et al.)
+### 5.1 Mediierte Verhandlung („Annealing Mediator", Klein et al.)
 Ein **neutraler, uninformierter Mediator** schlägt vollständige Kontrakte vor; die Parteien
 **stimmen nur mit Ja/Nein** ab (sie geben ihre Zielfunktion nicht preis). So bleiben die Ziele
 privat – der Mediator weiß nicht, *warum* etwas abgelehnt wird. Referenz: M. Klein et al.,
 *„Negotiating Complex Contracts"* (2003). Das ist die **Basis-Architektur**.
 
-### 4.2 Kontrakt-Repräsentation
+### 5.2 Kontrakt-Repräsentation
 Ein Kontrakt ist ein reellwertiger Vektor: 24 Mengen + 24 Preise. Bewusst „flach" gehalten,
 damit die GA-Operatoren generisch darüber laufen, während `amount(t)`/`price(t)` die lesbare Sicht liefern.
 
-### 4.3 Genetischer Algorithmus (Erzeugung der Vorschläge)
+### 5.3 Genetischer Algorithmus (Erzeugung der Vorschläge)
 Der Mediator hält eine **Population** von Kontrakten und verbessert sie evolutionär:
 - **Selektion:** Jeder Agent löscht den für *sich* schlechtesten Kontrakt (`delete`) → die Population
   driftet zu beidseitig akzeptablen Lösungen.
@@ -101,7 +156,7 @@ Der Mediator hält eine **Population** von Kontrakten und verbessert sie evoluti
 > Gegenüber der Scheduling-Basis (Permutationen, OX1-Crossover, Swap-Mutation) sind die Operatoren
 > auf **reellwertige Vektoren** umgestellt – das ist der Hauptunterschied im Code.
 
-### 4.4 Abstimmung + Simulated Annealing (Akzeptanz)
+### 5.4 Abstimmung + Simulated Annealing (Akzeptanz)
 Ein Agent akzeptiert einen Vorschlag relativ zum aktuellen Stand:
 - **Verbesserung** (Δ ≥ 0) → immer Ja.
 - **Verschlechterung** (Δ < 0) → Ja mit Wahrscheinlichkeit `exp(Δ / T)` (**Metropolis-Kriterium**).
@@ -111,7 +166,7 @@ Ein Agent akzeptiert einen Vorschlag relativ zum aktuellen Stand:
 Zweck: das Problem der Basis (frühe Stagnation, weil nur strikte Verbesserungen akzeptiert werden)
 entschärfen. `T = 0` ⇒ rein gieriges Verhalten wie in der Basis (als Vergleich nutzbar).
 
-### 4.5 Private Zielfunktionen
+### 5.5 Private Zielfunktionen
 Konvention: `utility` – **höher = besser** für beide (vereinheitlicht Abstimmung & Annealing).
 
 **Supplier (Profit, maximieren):**
@@ -129,7 +184,7 @@ cost   = Σ_t [ delivered·price
 Jeder Agent vergleicht `delivered` nur mit **seiner eigenen** privaten Größe (`generation` bzw.
 `demand`) – deshalb bleibt das Ziel privat.
 
-### 4.6 Warum eine Einigung existiert (Verhandlungszone)
+### 5.6 Warum eine Einigung existiert (Verhandlungszone)
 - Pro Slot lohnt der Deal für **beide** genau dann, wenn `f_t < p_t < r_t` und `x_t ≈ min(g_t, d_t)`.
 - Der Zahlungsterm `delivered·price` ist ein **reiner Transfer** zwischen den beiden – er hebt sich
   im **Gesamtwohlstand** heraus. Daraus folgt:
@@ -138,7 +193,7 @@ Jeder Agent vergleicht `delivered` nur mit **seiner eigenen** privaten Größe (
 - Verwandte Konzepte: **Individuelle Rationalität** (jeder besser als Netz), **Pareto-Effizienz**,
   **soziale Wohlfahrt**, **Zone of Possible Agreement (ZOPA)**.
 
-### 4.7 Speicher/Batterie (Erweiterung)
+### 5.7 Speicher/Batterie (Erweiterung)
 Jeder Agent kann einen **privaten Speicher** (`Battery`) haben, der die Slots koppelt: Überschuss wird
 geladen und in einem späteren Defizit-Slot genutzt. **Kontrakt-Repräsentation und Mediator bleiben
 unverändert** – nur die Zielfunktion wertet den Kontrakt jetzt über einen **greedy Dispatch** aus
@@ -147,7 +202,7 @@ Wirkungsgrad η). `capacity = 0` reproduziert exakt das speicherlose Modell. Eff
 schiebt Mittags-PV in den Abend-Peak, der Customer puffert Überlieferung → **geringere Netzabhängigkeit**
 und höherer beidseitiger Nutzen.
 
-### 4.8 Prognose-Unsicherheit & Imbalance Settlement (Erweiterung)
+### 5.8 Prognose-Unsicherheit & Imbalance Settlement (Erweiterung)
 Day-Ahead schließen die Parteien Verträge auf **Schätzwerten** (Forecast) ab; die echte Lieferung weicht
 durch Prognosefehler ab. Modell:
 - **Verhandlung** auf dem Forecast (bei aktiver Strafe um σ **abgesichert** → konservativeres Bieten).
@@ -156,7 +211,7 @@ durch Prognosefehler ab. Modell:
   dem Forecast, x-abhängig) (Stufe 2). σ = 0 bzw. α = 0 schalten den Effekt aus.
 - Die **Batterie puffert Prognosefehler** und senkt damit die Imbalance-Strafe.
 
-### 4.9 Mehrtägiges Lernen der Prognosegüte (adaptive σ-Schätzung)
+### 5.9 Mehrtägiges Lernen der Prognosegüte (adaptive σ-Schätzung)
 Realistisch kennt ein Agent sein wahres σ nicht, sondern **lernt** es über mehrere Tage: nach jedem
 Settlement beobachtet er seine relativen Prognosefehler und aktualisiert eine Schätzung σ̂ (laufende
 Streuung), mit der er am nächsten Tag hedged. σ̂ startet bei 0 (naiv) und konvergiert gegen σ.
@@ -180,15 +235,16 @@ Bei kleinem α (z. B. 20) ist der optimale Hedge nahe 0 – das Hedging um σ ko
 als es Imbalance spart, und Naiv ist am besten. Das ist konsistent mit der Realität: Imbalance-Preise sind
 gerade deshalb stark punitiv, um genaue Prognosen/Fahrpläne zu erzwingen.
 
-### 4.10 Stufen des Projekts
+### 5.10 Stufen des Projekts
 
 Das Projekt ist modular in **drei Ausbaustufen** strukturiert:
 
 #### Stufe 1: Basismodell (Referenz)
 - **Ziel:** Zeige, dass bilaterale Verhandlung beiden Agenten nutzt.
-- **Modul:** [Verhandlung.java](src/Verhandlung.java) mit `startTemperature=0` oder CLI `java Verhandlung 0`.
-- **Annahmen:** Slots sind unabhängig, keine Prognose-Unsicherheit (`forecastSigma=0`, `imbalancePrice=0`).
-- **Ergebnis:** Tendenziell Win-Win; beide schlagen ihren Netz-Fallback. Keine Batterie, kein Zeitkopplungen.
+- **Modul:** [Verhandlung.java](src/Verhandlung.java), Aufruf `java Verhandlung 0 1 42 0 0` (T=0, ohne
+  Prognose-Unsicherheit); ausgewertet wird der **„ohne Batterie"**-Lauf.
+- **Annahmen:** Slots unabhängig, keine Prognose-Unsicherheit (`forecastSigma=0`, `imbalancePrice=0`), keine Batterie.
+- **Ergebnis:** Tendenziell Win-Win; beide schlagen ihren Netz-Fallback.
 - **Referenz:** Klein et al. (2003), Annealing Mediator mit GA.
 
 #### Stufe 2: Mit Batterie + Prognose-Unsicherheit (Realismus)
@@ -196,20 +252,20 @@ Das Projekt ist modular in **drei Ausbaustufen** strukturiert:
 - **Modul:** [Verhandlung.java](src/Verhandlung.java) Standard-Aufruf, `startTemperature > 0`, Batterie aktiv.
 - **Annahmen:**
   - Prognose-Unsicherheit: `forecastSigma=0,15` (Agenten verhandeln auf Forecasts, Settlement auf Real).
-  - Imbalance-Strafe: `imbalancePrice=20` ct/kWh (Strafen-Anreiz, konservativ zu bieten).
+  - Imbalance-Strafe: `imbalancePrice=20` ct/kWh (Anreiz, konservativ zu bieten).
   - Batterie: Supplier 10 kWh/3 kW, Customer 5 kWh/3 kW, je η=0,95.
 - **Mechanik:**
   - Batterie-Dispatch: greedy Lade-/Entlade-Arbitrage (mittags speichern → abends nutzen).
-  - Settlement: Agenten erkennen ihre (ggü. Forecast unterschiedliche) realen Profile und zahlen Imbalance-Strafeu.
+  - Settlement: Agenten erkennen ihre (ggü. Forecast abweichenden) realen Profile und zahlen Imbalance-Strafen.
 - **Ergebnis:** Speicher reduziert Netz-Abhängigkeit um ~30 %, beide Seiten profitieren.
 
 #### Stufe 3: Mehrtägiges Lernen (adaptive σ-Schätzung)
 - **Ziel:** Wie lernen Agenten ihre Prognosefehler über mehrere Tage?
 - **Modul:** [MehrtagesVerhandlung.java](src/MehrtagesVerhandlung.java).
-- **Szenario:** 30 aufeinanderfolgende Tage (gleiche Seed-Sequenz, tägliche Szenarien unterschiedlich).
+- **Szenario:** 30 aufeinanderfolgende Tage (feste Seed-Sequenz, tägliche Szenarien unterschiedlich).
 - **Mechanik:**
   - Day-Ahead verhandeln beide auf ihrem Forecast mit Hedge σ̂ (gelernte Schätzung des Prognosefehlers).
-  - Nach Settlement (mit echten Profilen + Imbalance `α=100` ct/kWh, höher als Stufe 2) beobachten beide ihre
+  - Nach Settlement (echte Profile + Imbalance `α=100` ct/kWh, höher als Stufe 2) beobachten beide ihre
     **relativen Prognosefehler** und updaten σ̂ (laufende Streuung der Abweichungen).
   - σ̂ startet bei 0 (naiv), konvergiert asymptotisch gegen das wahre σ.
 - **Vergleich (auf derselben Tagesfolge):**
@@ -217,7 +273,7 @@ Das Projekt ist modular in **drei Ausbaustufen** strukturiert:
   - **Learner** (`σ̂` adaptiv): lernt aus Feedback → nähert sich dem Oracle an.
   - **Oracle** (`σ̂ ≡ σ` ab Tag 1): kennt σ exakt (obere Schranke).
 - **Ergebnis:** Learner erreicht Oracle-Niveau und schlägt Naiv (bei hohem α), proof-of-concept für Lernfähigkeit.
-- **Output:** `results/learning_curve.csv` + Python-Plot über 30-Tage-Verlauf von Wohlstand & σ̂.
+- **Output:** `results/learning_curve.csv` + Python-Plots über den 30-Tage-Verlauf von Wohlstand & σ̂.
 
 | Aspekt | Stufe 1 | Stufe 2 | Stufe 3 |
 |---|---|---|---|
@@ -230,7 +286,7 @@ Das Projekt ist modular in **drei Ausbaustufen** strukturiert:
 
 ---
 
-## 5. Ablauf einer Verhandlung
+## 6. Ablauf einer Verhandlung
 
 Aus [Verhandlung.java](src/Verhandlung.java), pro Runde (Default: 10 000 Runden):
 
@@ -251,9 +307,9 @@ und möglichst effizient.
 
 ---
 
-## 6. Ergebnisse lesen und einordnen
+## 7. Ergebnisse lesen und einordnen
 
-### 6.1 Die Kennzahlen im Report
+### 7.1 Die Kennzahlen im Report
 Das Programm gibt **zwei Reports** aus (ohne/mit Batterie) plus einen Vergleich. Die Werte sind die
 **realisierten** (Settlement-)Werte. Geldbeträge in **EUR**, Stückpreise in **ct/kWh**, Energie in **kWh**.
 Beispiel mit Batterie (dank Seeds reproduzierbar):
@@ -281,8 +337,8 @@ Imbalance-Strafe: Supplier   0,02 EUR, Customer   0,71 EUR
 - **Prognosefehler / Imbalance-Strafe:** Volumen der Fehlprognose [kWh] und die dafür fällige Strafe [EUR].
   Ohne Batterie kippt der Supplier dadurch oft ins Minus; die Batterie puffert den Fehler ab.
 
-### 6.2 Baselines und Optimum (die Bezugsgrößen)
-Ohne diese drei Referenzwerte ist eine Zahl wie „5,70 EUR Profit" bedeutungslos:
+### 7.2 Baselines und Optimum (die Bezugsgrößen)
+Ohne diese drei Referenzwerte ist eine Zahl wie „6,82 EUR Profit" bedeutungslos:
 - **Supplier-Baseline** = alles einspeisen: `Σ g_t·f_t`. (Was er *ohne* Deal bekäme.)
 - **Customer-Baseline** = alles aus dem Netz: `Σ d_t·r_t`. (Was er *ohne* Deal zahlen müsste.)
 - **Optimum (ohne Speicher)** = Wohlstand bei `x_t = min(g_t, d_t)`: maximal möglicher Direkthandel.
@@ -295,7 +351,7 @@ Das Ergebnis ist gut, wenn beide Baselines geschlagen werden **und** der Wohlsta
 > nachgelagerte **Auswertung** (`Metrics`) rechnet beide Seiten zusammen, um das Ergebnis zu bewerten.
 > Die Privatheit im Mechanismus bleibt gewahrt.
 
-### 6.3 Beispiel-Ergebnis interpretiert
+### 7.3 Beispiel-Ergebnis interpretiert
 - **Mengen** `x_t` folgen `min(g_t, d_t)`: nachts wenig (kein PV), mittags trifft PV-Überschuss auf
   geringen Bedarf → wenig Handel; in den Last-Peaks (morgens/abends) ist wenig PV da → der Customer
   muss Restbedarf aus dem Netz decken. Das **zeitliche Auseinanderfallen** von PV (mittags) und Last
@@ -303,48 +359,50 @@ Das Ergebnis ist gut, wenn beide Baselines geschlagen werden **und** der Wohlsta
 - **Preise** `p_t` liegen immer im Band – das ist **erzwungen** (Clamping), nicht „erkämpft". Verhandelt
   wird nur die **Lage** im Band (Verteilung des Gewinns).
 
-### 6.4 Beobachtungen
+### 7.4 Beobachtungen (Multi-Seed, via `Sweep`)
 - Win-Win wird über verschiedene Seeds hinweg erreicht; der Sozialwohlstand erreicht ~90–95 % des
   speicherlosen Optimums – mit Batterie übersteigt er diese Referenz.
-- Bei nur zwei Agenten trägt die Vielfalt der GA-Population die Suche; der Annealing-Anteil (`T > 0`
-  gegenüber `T = 0`) wirkt sich hier nur gering aus. Beide Varianten konvergieren deutlich vor Rundenende.
-- Die Batterie senkt die Netzabhängigkeit deutlich (im Standardlauf ~−30 %) und verbessert beide Seiten.
+- **Batterie-Wirkung** (12 Seeds): Welfare −15,4 € → −9,7 €, Netzabhängigkeit ~81 → ~61 kWh, Win-Win
+  83 % → 100 %; der Nutzen steigt mit der Kapazität (abnehmender Grenznutzen).
+- **Annealing-Temperatur** wirkt sich kaum aus (Welfare über T₀ = 0…1000 flach, innerhalb der Streuung):
+  bei nur zwei Agenten trägt die Vielfalt der GA-Population die Suche.
 
 ---
 
-## 7. Parameter
-Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
+## 8. Parameter
+Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt (Mehrtage/Sweep haben eigene Defaults + CLI):
 
 | Parameter | Default | Wirkung |
 |---|---|---|
 | `popSize` | 200 | Größe der Kontrakt-Population (Vielfalt vs. Rechenzeit). |
 | `maxRounds` | 10 000 | Verhandlungsdauer. |
 | `deletedSize` | 30 | Löschungen/Runde = Selektionsdruck. |
-| `startTemperature` | 250 | Annealing-Start (`0` = gierig wie Basis). Auch per Arg: `java Verhandlung 0`. |
+| `startTemperature` | 250 | Annealing-Start (`0` = gierig wie Basis). Arg `[0]`. |
 | `coolRounds` | 60 % von `maxRounds` | Wann die Temperatur 0 erreicht. |
 | `mutationSigma` | 0,08 | Mutationsstärke (Anteil der Spanne). |
 | `crossoverRate` | 0,5 | Anteil Crossover vs. Mutation bei Reproduktion. |
-| `scenarioSeed` | 42 | Seed der Profil-Erzeugung (auch Arg `[2]`). |
-| `negotiationSeed` | 1 | Seed des Verhandlungs-Zufalls: GA, Votes, Lösch-Münze (auch Arg `[1]`). |
+| `negotiationSeed` | 1 | Seed des Verhandlungs-Zufalls: GA, Votes, Lösch-Münze. Arg `[1]`. |
+| `scenarioSeed` | 42 | Seed der Profil-Erzeugung. Arg `[2]`. |
+| `forecastSigma` | 0,15 | relativer Prognosefehler (Day-Ahead); 0 = perfekte Prognose. Arg `[3]`. |
+| `imbalancePrice` | 20 | α: Strafe je kWh Kontrakt-Fehlmenge [ct/kWh]; 0 = aus. Arg `[4]`. |
 | Batterie Supplier | 10 kWh, 3 kW, η 0,95 | `capacity`, `maxPower`, `roundTripEfficiency`; `capacity=0` = aus. |
 | Batterie Customer | 5 kWh, 3 kW, η 0,95 | dito; eigener privater Speicher. |
-| `forecastSigma` | 0,15 | relativer Prognosefehler (Day-Ahead); 0 = perfekte Prognose. Arg `[3]`. |
-| `imbalancePrice` | 20 | α: Strafe je kWh Imbalance [ct/kWh]; 0 = aus. Arg `[4]`. |
-| Mehrtage: `days`/`σ`/`α` | 30 / 0,15 / 100 | Lern-Treiber `MehrtagesVerhandlung` (CLI: `α days σ`); α dort punitiv. |
+| Mehrtage: `α`/`days`/`σ` | 100 / 30 / 0,15 | Lern-Treiber `MehrtagesVerhandlung` (CLI: `α days σ`); α dort punitiv. |
+| Sweep: `nSeeds`/`rounds` | 12 / 5000 | `Sweep` (CLI: `nSeeds rounds`). |
 
 ---
 
-## 8. Modellgrenzen / Vereinfachungen
+## 9. Modellgrenzen / Vereinfachungen
 - **Preisband wird erzwungen**, nicht ausgehandelt (Clamping auf `[f_t, r_t]`); verhandelt wird nur die Lage im Band.
 - **Greedy-Batterie-Dispatch:** lädt/entlädt sofort, nicht kostenoptimal (z. B. Speicher gezielt für die teuersten Slots aufsparen).
 - **Optimum-Referenz ist speicherlos:** die %-Angabe bezieht sich auf das Optimum ohne Speicher; mit Batterie kann der Wohlstand >100 % erreichen.
 - **`current` startet bei einem zufälligen Kontrakt**, nicht am Netz-Status-quo; nur das Archiv garantiert ein Win-Win-Ergebnis.
 - **Matching-Rate** misst nur Unterdeckung, nicht Überlieferung (dafür gibt es die separate Zeile).
 - **Konservatives Bieten** ist als fester Hedge modelliert (Forecast um σ abgesichert), nicht aus einer
-  stochastischen Optimierung abgeleitet; die Imbalance-Strafe `α` ist kalibriert (Default 20), nicht aus
-  realen Imbalance-Preisen übernommen.
+  stochastischen Optimierung abgeleitet; die Imbalance-Strafe `α` ist kalibriert, nicht aus realen
+  Imbalance-Preisen übernommen.
 
-## 9. Glossar
+## 10. Glossar
 
 | Konzept | Code-Name | Bedeutung | Einheit |
 |---|---|---|---|
@@ -363,80 +421,3 @@ Alle in [Verhandlung.java](src/Verhandlung.java) oben gebündelt:
 | `σ` | `forecastSigma` | relativer Prognosefehler | – |
 | `α` | `imbalancePrice` | Strafe je kWh Kontrakt-Fehlmenge (unerwartete Unterdeckung) | ct/kWh |
 | `σ̂` | (Treiber-Zustand) | gelernte Schätzung des eigenen Prognosefehlers σ (Stufe 3) | – |
-
-## 10. Ausführen
-
-### 10.1 Kompilierung
-```bash
-# Alle Java-Dateien kompilieren (mit UTF-8-Encoding für Umlaute)
-javac -encoding UTF-8 -d bin src/*.java
-```
-
-### 10.2 Hauptmodule
-
-#### Verhandlung.java (Stufe 1–2)
-Einzeltag-Verhandlung mit optionaler Batterie und Prognose-Unsicherheit.
-
-**Standard-Lauf (Stufe 2 mit Batterie):**
-```bash
-java -cp bin Verhandlung
-```
-Erzeugt:
-- Zwei Console-Reports (ohne/mit Batterie) + Vergleich
-- `results/slots_data.csv` (Slot-Details)
-- `results/summary_data.csv` (aggregierte Kennzahlen)
-
-**Lauf mit angepasstem Annealing-Start (`startTemperature`):**
-```bash
-java -cp bin Verhandlung 0      # Stufe 1 (rein gierig, T=0, wie Basis-Vergleich)
-java -cp bin Verhandlung 500    # höheres Annealing-Potenzial
-```
-
-**Alle Parameter per Kommandozeile überschreiben:**
-```bash
-java -cp bin Verhandlung <startTemperature> <negotiationSeed> <scenarioSeed> <forecastSigma> <imbalancePrice>
-# Beispiel:
-java -cp bin Verhandlung 250 1 42 0.15 20
-```
-
-#### MehrtagesVerhandlung.java (Stufe 3)
-Mehrtägige Verhandlung (30 Tage) mit adaptivem Lernen der Prognosefehler-Schätzung σ̂.
-
-**Standard-Lauf:**
-```bash
-java -cp bin MehrtagesVerhandlung
-```
-Laufs 3 Strategien (Naiv, Learner, Oracle) auf 30 Tagen mit `α=100`, `σ=0,15`:
-- Console: Tägliche Ergebnisse und Lernverlauf
-- `results/learning_curve.csv` (30 Zeilen: Tag, σ̂-Schätzungen, kumulative Wohlstände)
-
-**Mit angepassten Parametern:**
-```bash
-java -cp bin MehrtagesVerhandlung <imbalancePrice> <days> <trueSigma>
-# Beispiel: Learner mit kleinerem Imbalance-Preis:
-java -cp bin MehrtagesVerhandlung 50 30 0.15
-```
-
-### 10.3 Visualisierung
-Nach einem Verhandlungslauf (Stufe 1–2) oder Mehrtage-Lauf (Stufe 3):
-
-```bash
-python3 visualize.py
-```
-
-Erzeugt (in `results/`):
-- `scenario_profile.png` – Tagesprofil (Erzeugung, Bedarf, Preisband)
-- `contract_comparison.png` – Vertrag pro Slot (Mengen, Preise)
-- `grid_dispatch.png` – Netz-Interaktion (Einspeisung, Bezug)
-- `summary_bars.png` – Ergebnis-Balken (Gewinn, Kosten, Wohlstand)
-- `welfare_breakdown.png` – Wohlstand im Vergleich (Baseline/Verhandelt/Optimum)
-- `learning_curve.png` – (nur bei MehrtagesVerhandlung) 30-Tage-Verlauf von σ̂ und Wohlstand
-
-### 10.4 Hinweise
-
-- **Encoding:** Umlaut-„Mojibake" in der Windows-Konsole ist nur eine Anzeige-Sache (Codepage);
-  die Quelldateien sind UTF-8. In IDE-Run-Konfigurationen ggf. `-Dfile.encoding=UTF-8` setzen.
-- **Reproduzierbarkeit:** Mit gleichem `scenarioSeed` und `negotiationSeed` sind die Ergebnisse exakt
-  reproduzierbar (= Nützlich für Vergleiche).
-- **Performance:** Einzeltag (~10 000 Runden) dauert ~2 s; MehrtagesVerhandlung (30 × 4 000 Runden) ~30 s.
-
